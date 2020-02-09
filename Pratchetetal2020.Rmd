@@ -1,0 +1,67 @@
+---
+title: "Pratchett et al 2020"
+author: "Samuel Matthews"
+date: "9 February 2020"
+output: html_document
+---
+
+# Temporal and Spatial Dynamics of Butterflyfish populations at Lizard Island 1995-2020
+
+This analysis will focus on the temporal and habitat trends of Buttterfy fish populations. 
+
+1. Temporal trends in Total Fish abundance, richness evenness across habaitat types 
+2. Fish Community Composition trends across time
+3. Identification of Specialist/Generalist species across habitats
+3. Coral Community Analysis
+
+## 1. Temporal trends
+
+First job is to calcualte, richness, evenness, and total abundance with respect to different feeding groups.
+
+```{r Setup}
+library(tidyverse)
+library(plyr)
+library(vegan)
+# Load Data
+butt = read.csv("ButterflyfishLizardIsland95-20.csv", header=T)
+
+# create long format of data for plotting
+butt.long = butt %>% 
+  # dplyr::select(1:27) %>%
+  tidyr::gather(key = "Species", value = "Number", -c(1:4, 28:32)) %>%
+  separate(Species, c("Diet", "Species"), sep = 5) %>%
+  mutate(Diet = gsub("[[:punct:]]", "", Diet))
+
+
+# Calculate RICHNESS, evenness, Diveristy
+menhinick <- function(x) {
+                          sum(x>0)/sqrt(sum(x))
+}
+margalef <- function(x) {
+                         (sum(x>0)-1)/log(sum(x))
+}
+# Richness
+
+indices = ddply(butt,~No.,function(x) {
+  data.frame(RICHNESS=sum(x[c(5:27)]>0),
+             RICHNESS.MEN = menhinick(x[c(5:27)]),
+             RICHNESS.MAR = margalef(x[c(5:27)]),
+             SHANNON=diversity(x[c(5:27)], index="shannon"),
+             SIMPSON=diversity(x[c(5:27)], index="simpson"),
+             PILOU.EVEN=diversity(x[c(5:27)], index="simpson")/log(sum(x[c(5:27)]>0)))
+             
+})
+
+butt = butt %>% left_join(indices)
+```
+```{r Plots}
+p1 = ggplot(butt, aes(x = Year, y= Total)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+  theme_bw(base_size = 14)
+p2 = ggplot(butt, aes(x = Year, y= SIMPSON)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+  theme_bw(base_size = 14)
+p3 = ggplot(butt, aes(x = Year, y= PILOU.EVEN)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+  theme_bw(base_size = 14)
+p4 = ggplot(butt, aes(x = as.factor(Year), y= RICHNESS)) + geom_point() + geom_smooth() + facet_wrap(~zone)+ geom_boxplot()
+  theme_bw(base_size = 14)
+```
+
