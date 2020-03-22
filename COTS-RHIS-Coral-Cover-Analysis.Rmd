@@ -1,0 +1,1764 @@
+---
+title: "COTS Control Program - Coral Cover Analysis"
+author: "Samuel Matthews"
+date: "08 October 2019"
+output: 
+  html_document:
+    toc: TRUE
+    theme: cerulean
+    highlight: tango
+    number_sections: TRUE
+    code_folding: hide
+    toc_float: TRUE
+    collapsed: FALSE
+    smooth_scroll: TRUE
+---
+
+# Overview
+
+The purpose of this analysis is to understand the inherent variability within the RHIS survey method for estimates of both Coral Cover and COTS density. Within the COTS Control Program, RHIS observations are collected at the same locations within a cull site to monitor changes to coral cover, with the hope of being able to quantify how much coral is saved by performing COTS control at a reef and site level. There are a number of questions that need to be asked to determine if this approach is feasible. 
+
+  1. How variable are RHIS estimates of Coral Cover?
+  2. Given the variability of estimates, how many RHIS surveys would be required to identify a change in coral cover?
+  3. What are the sources of variability for estimates, how can they be minimized?
+  4. Are there other survey methods, which would allow us to more effectively and efficiently monitor coral cover?
+
+```{r setup, cache=F, echo=F, warning=FALSE, results='hide', message=FALSE}
+# install.packages("lme4")
+library(lme4)
+library(leaflet)
+library(zoo)
+# library(sp)
+library(rgdal)
+# library(plotly)
+library(DT)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(sjPlot)
+```
+
+```{r Load and Process Data, cache = T, echo=F, results='hide'}
+#### Load Shapefiles ----
+shp.reefs = rgdal::readOGR("Shapefiles/Indicative_Reef_boundary/Indicative_Reef_boundary.shp", verbose = F)
+shp.zones = rgdal::readOGR("Shapefiles/Great_Barrier_Reef_Marine_Park_Zoning/Great_Barrier_Reef_Marine_Park_Zoning.shp", verbose = F)
+shp.mgmt = rgdal::readOGR("Shapefiles/Management_Areas_of_the_GBRMP__Poly_/Management_Areas_of_the_GBRMP__Poly_.shp", verbose = F)
+
+colnames(shp.reefs@data)[13] = "ReefName"
+colnames(shp.reefs@data)[3] = "ReefID"
+shp.reefs@data = shp.reefs@data[-c(1:2,4:12,14, 18:20)]
+shp.reefs = shp.reefs[order(shp.reefs@data$ReefName),]
+
+#### Load Observation Data ----
+
+# RHIS
+dat.RHIS = read.csv("Data/ObsData_RHIS.csv", header =T, na.strings = "")
+dat.CULL = read.csv("Data/ObsData_Culling.csv", header =T, na.strings = "")
+dat.MANT = read.csv("Data/ObsData_MantaTow.csv", header =T, na.strings = "")
+dat.REEF = read.csv("Data/SpatialData_Reef.csv", header = T, na.strings = c("", "NA"))
+
+#### Ensure consistent column names ----
+
+# combines all data files into a list
+df.list = mget(ls(pattern="dat")) 
+
+# replace "." and "X"'s in column names
+for (i in 1:length(df.list)) {
+  colnames(df.list[[i]]) = gsub("X", "", colnames(df.list[[i]]), fixed = T)
+  colnames(df.list[[i]]) = gsub(".", "", colnames(df.list[[i]]), fixed = T)
+}
+
+# unlist the dataframes and overwtite those n the global environment
+list2env(df.list, .GlobalEnv) 
+
+report_dates = as.Date(c("2018-11-01", "2019-09-30"))
+figure_start_date = as.Date("2018-11-01")
+
+# Consistent Date Format
+dat.CULL$Surveydate = as.Date(dat.CULL$Surveydate, "%d/%m/%Y")
+colnames(dat.CULL)[20] = "X_COORD"
+colnames(dat.MANT)[7] = "ReefName"
+dat.MANT$TowDate = as.Date(dat.MANT$TowDate, "%d/%m/%Y")
+dat.RHIS$ObservationDate = as.Date(dat.RHIS$ObservationDate, "%d/%m/%Y")
+dat.RHIS$Quarter <- as.yearqtr(dat.RHIS$ObservationDate, format = "%d/%m/%Y")
+dat.CULL$Quarter <- as.yearqtr(dat.CULL$Surveydate, format = "%d/%m/%Y")
+```
+
+```{r Summaries, cache=T, results='hide', warning=FALSE}
+# check how NA's are brought in --> blanks
+dat.RHISFull = dat.RHIS
+dat.RHIS = dat.RHIS %>%
+  dplyr::select(1:11, Macroalgae, BenthosLiveSoftCoral, BenthosLiveHardCoral, 
+                BleachingPresentYN, COTSSeenAdult, COTSCullSite, Quarter) %>%
+  dplyr::filter(ReefID %in% c("17-063a", "18-075", "18-043", "17-047") & 
+                  ObservationDate > as.Date("2018-11-01") &
+                  !is.na(COTSCullSite))
+
+REEFS = dat.RHIS %>% distinct(ReefName) %>% pull() %>% as.character()
+
+# Offset the dates, so the labels are in the middle of the bars
+date.offset = seq.Date(figure_start_date, report_dates[2],by = "month")
+date.offset =  date.offset + round(lubridate::days_in_month(date.offset)/2,0)
+date.offset2 = date.offset[which(rep(c(T,F), length.out=length(date.offset)))]
+# Create a data frmae to hold the values for the CPUE thresholds to be plotted as horzontal lines
+df = data.frame(cpue=c(0.04, 0.08))
+df1 = data.frame(thresh=c(0.11, 0.22,1))
+thresh = data.frame(M = c(0.11, 0.22,1),
+                    R = c(0.024, 0.05, 0.24))
+# Creates a version of the Reef Name that removes /'s which can't be used in filenames
+REEF.filesave = gsub("U/N", "UN", REEFS)
+REEF.filesave = gsub("54/55", "54_55", REEF.filesave)
+
+# Summarise culling data at a reef level
+dat.CULL = dat.CULL %>% select(-32,-33)
+dat.CULL.Reef = dat.CULL %>% 
+  dplyr::filter(ReefName %in% REEFS) %>%
+  dplyr::filter(Surveydate > figure_start_date) %>%
+  mutate(CPUE=Total/Bottomtime) %>%
+  group_by(ReefName, Quarter, VoyageVessel) %>% 
+  mutate(VoyageStart = min(Surveydate),
+         Month = as.Date(as.yearmon(VoyageStart, "%Y %b"))) %>%
+  group_by(ReefName, Month, Sitename) %>%
+  summarise(TotalCots = sum(Total, na.rm = T),
+            MeanCPUE = mean(CPUE, na.rm =T),
+            sdCPUE = sd(CPUE, na.rm = T),
+            seCPUE = sdCPUE/sqrt(length(CPUE)),
+            Effort = sum(Bottomtime, na.rm = T),
+            CPUE = TotalCots/Effort, 
+            FirstCull = min(Surveydate))
+
+# add date offset to the dataframe
+dat.CULL.Reef$Offset = round(lubridate::days_in_month(dat.CULL.Reef$Month)/2,0)
+  
+# Summarise manta data at reef level
+dat.MANT.Reef = dat.MANT %>%
+  dplyr::filter(tolower(ReefName) %in% tolower(REEFS)) %>%
+  dplyr::filter(TowDate > figure_start_date) %>%
+  group_by(ReefName, VoyageVessel) %>%
+  mutate(VoyageStart = min(TowDate),
+          Month = zoo::as.yearmon(VoyageStart)) %>%
+  group_by(ReefName, Month) %>%
+  summarise(meanHC = mean(HCNumber, na.rm = T),
+            n= n(),
+            meanCOTS = mean(COTSObserved, na.rm = T),
+            seCOTS = sd(COTSObserved, na.rm =T)/sqrt(n()),
+            seHC = sd(HCNumber, na.rm=T)/sqrt(n()),
+                # Creates min and max for the coloured rectangles
+            ymin = ifelse(meanHC <= 10, 0, 
+                          ifelse(meanHC <=30, 10, 
+                                 ifelse(meanHC <=50,30,
+                                        ifelse(meanHC <=75, 50, 75)))),
+            ymax = ifelse(meanHC <= 10, 10,
+                          ifelse(meanHC <=30, 30,
+                                 ifelse(meanHC <=50,50,
+                                        ifelse(meanHC <=75, 75, 100)))),
+            HCCat = ifelse(meanHC <= 10, "0-10%", 
+                           ifelse(meanHC <=30, "10-30%", 
+                                  ifelse(meanHC <=50,"30-50%",                                                    
+                                         ifelse(meanHC <=75, "50-75%", "75-100%")))))
+# add month and offset columns
+dat.MANT.Reef$Month = as.Date(as.yearmon(dat.MANT.Reef$Month, "%Y %b"))
+dat.MANT.Reef$Offset = lubridate::days_in_month(dat.MANT.Reef$Month)
+# convert the HCCat column to a factor and define the order of the levels - this ensures every category is diplayed in legends
+dat.MANT.Reef$HCCat = factor(dat.MANT.Reef$HCCat, levels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))
+  
+# Summarise RHIS data at a reef level
+dat.RHIS.Reef = dat.RHIS %>% 
+  dplyr::filter(ReefName %in% REEFS) %>%
+  dplyr::filter(ObservationDate > figure_start_date) %>%
+  group_by(ReefName, Vessel) %>%
+  mutate(Month = zoo::as.yearmon(ObservationDate)) %>%
+  group_by(ReefName, Month) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral, na.rm = T),
+            nRHIS = n(),
+            sdHC = sd(BenthosLiveHardCoral, na.rm = T),
+            seHC = sd(BenthosLiveHardCoral, na.rm=T)/sqrt(n()),
+            meanCOTS = mean(COTSSeenAdult, na.rm = T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) %>%
+  filter(nRHIS >=9)
+
+# Summarise RHIS at a Site level
+dat.RHIS.Site = dat.RHIS %>% 
+  dplyr::filter(ReefName %in% REEFS) %>%
+  dplyr::filter(ObservationDate > figure_start_date) %>%
+  group_by(ReefName, COTSCullSite, Vessel) %>%
+  mutate(Month = zoo::as.yearmon(ObservationDate)) %>%
+  group_by(ReefName, COTSCullSite, Month) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral, na.rm = T),
+            nRHIS = n(),
+            sdHC = sd(BenthosLiveHardCoral, na.rm=T),
+            seHC = sd(BenthosLiveHardCoral, na.rm=T)/sqrt(n()),
+            meanCOTS = mean(COTSSeenAdult, na.rm = T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) %>%
+  mutate(Month = zoo::as.yearmon(Month)) 
+
+# Change month and Offset for plotting
+dat.RHIS.Reef$Month = as.Date(as.yearmon(dat.RHIS.Reef$Month, "%Y %b"))
+dat.RHIS.Reef$Offset = round(lubridate::days_in_month(dat.RHIS.Reef$Month)/2,0)
+dat.RHIS.Site$Month = as.Date(as.yearmon(dat.RHIS.Site$Month, "%Y %b"))
+dat.RHIS.Site$Offset = round(lubridate::days_in_month(dat.RHIS.Site$Month)/2,0)
+
+# Remove extra observations for John Brewer Reef
+# dat.RHIS.Site = dat.RHIS.Site[-which(dat.RHIS.Site$COTSCullSite %in% "JOH_18-075_6" & 
+                                     # dat.RHIS.Site$Month %in% as.Date(c("2018-12-01", "2019-02-01"))),]
+    
+# create an object that defines the ylimit for the CPUE graphs based on the max CPUE
+ylimCOTS = ifelse(max(na.omit(dat.CULL.Reef$CPUE))<0.5, 0.5,
+                  ifelse(max(na.omit(dat.CULL.Reef$CPUE))<1.5,1.5,
+                         ifelse(max(na.omit(dat.CULL.Reef$CPUE))<2.5, 2.5,4.3)))
+# create an object that defines how much to offset the labels for the CPUE graph
+nudgy = ifelse(ylimCOTS==0.5, 0.013,
+                ifelse(ylimCOTS==1.5, 0.038,
+                       ifelse(ylimCOTS==2.5, 0.07, 0.1)))
+
+```
+
+# Reef Level Coral and COTS Context {.tabset}
+
+In order to address the above questions regarding the efficacy of RHIS for specific purposes, we will consider four case studies reefs within the control program, from which extensive surveillance and culling data has been collected from November 2018 - November 2019, representing varying levels of COTS outbreaks and therefore coral cover loss. The purpose of this section is to understand the context for coral cover decline/increase of coral cover in the period. __NB At the site level RHIS data used in the below figures are collected from the same GPS locations, however estimates of reef level coral cover over time will likely come from different sites around the reef.__
+
+## Coral Cover
+
+The below figure highlights the variability of coral cover estimates over time for both RHIS and Manta Tow observation. It is important to note how estimates for both methods can vary substantially from one time point to the next. While declines of up to 30% could potentially occur due to severe COTS outbreaks, there is no potential mechanism that could increase coral cover of magnitudes > 5% over the course of a year, let alone a month. The point here is to recognise the inherent variability of coral cover estimates for both methods available to the COTS control program. *Later in this report we will investigate statistically the ability to detect coral cover change using RHIS and manta tow data.*
+
+```{r Coral Cover Graph, out.width="100%", fig.height=6}
+# COral Cover GRAPH
+ggplot(dat.MANT.Reef, aes(x=Month)) + 
+  coord_cartesian(ylim=c(0, 100),xlim =report_dates) +
+  # add manta tow rectangles 
+  geom_rect(aes(xmin=Month, xmax=Month+Offset, ymin=ymin,
+                ymax=ymax,  fill = HCCat), alpha=0.5) +
+  theme_bw(base_size = 12)+ 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                     sec.axis = sec_axis(~.*1, name = "Manta Tow Hard Coral Cover Category", 
+                                          breaks = c(5,20,40,62.5,87.5), 
+                                          labels=c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))) +
+  scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+  geom_pointrange(data=dat.RHIS.Reef, 
+                  aes(x=Month+Offset, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, color='blah'),
+                      shape=22, fill="white") +
+  scale_color_manual(name="RHIS Mean\nHard Coral Cover", values = "black", labels=element_blank()) +
+  scale_fill_manual(name = "Manta Tow Hard\nCoral Cover Category", 
+                    values = c("red", "orange", "yellow", "green", "darkgreen"),
+                    labels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"), drop=F) +
+  guides(color = guide_legend(order = 1), fill = guide_legend(nrow=2, order = 0)) +          
+  facet_wrap(~ReefName)
+```
+
+## COTS Catch Per Unit effort
+
+Since the control program was restructured to align with Integrated Pest Management principles in Novemeber 2018, culling is conducted at a priority reef on repeat voyages until COTS Catch per unit effort (CPUE) is reduced to ecologically sustainable thresholds. The below figure highlights reef levels culling progress at four priority reefs, with boxplots highlighting the variability in CPUE amongst cull sites. Whilst control efforts at Eddy Reef and Farquharson Reef have achieved targets and these reefs have been transitioned to Maintenance mode, efforts remain ongoing at John Brewer and Fore and Aft Reefs. These figures provide the context for expected coral loss at these reefs. As 0.04 CPUE represents the ecological threshold below which coral growth can outpace consumption by COTS, we would expect varying levels of coral cover decline for all four reefs, whilst coral increase would be marginal at best (<5%).
+
+
+```{r Reef Plots,out.width="100%", fig.height=6}
+# CPUE GRAPH
+ggplot(dat.CULL.Reef, aes(y=CPUE,x=Month+Offset)) +
+  coord_cartesian(xlim = c(figure_start_date, report_dates[2])) +
+  geom_hline(data=df, aes(yintercept = cpue, colour=factor(cpue, levels = c("0.08", "0.04"))), size=1) +
+  # geom_point(aes(x=VoyageStart, y=CPUE)) +
+  geom_boxplot(aes(y=CPUE, x=Month+Offset, group=Month), width=28) +
+  theme_bw(base_size=12) +
+  ylab("Catch Per Unit Effort (CPUE)") +
+  scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(name = "CPUE Thresholds", values = c("coral", "purple"),
+                      labels = c("> 40% Coral Cover", "< 40% Coral Cover")) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank()) +
+  facet_wrap(~ReefName, scales = "free_y")
+```  
+
+## COTS Per Observation
+
+THis figure provides further context to the outbreak severity at each of the four reefs, highlighting the progress of culling activities in redcuing this severity. Outbreak status is assessed via broadscale manta tow (circles) with additional context providied by RHIS which has higher detectability but also higher variability due to its reduced spatial extent. Importantly, over the course of the year, all reefs have been brought below outbreak thesholds, with the exception of John Brewer Reef which remains in the "potential" outbreak category. This provides further evidence that while COTS activity should have reduced coral cover at these reefs, if the current levels of COTS density are maintained or reduced further, increases in coral cover should be expected. 
+
+```{r COTS, out.width="100%", fig.height=6}
+# COTS/Manta Tow
+ggplot(dat.MANT.Reef, aes(x=Month+Offset, y=meanCOTS)) + 
+  geom_hline(data=df1, aes(yintercept = thresh, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1) +
+  geom_pointrange(data=dat.MANT.Reef, aes(ymin = meanCOTS-seCOTS, ymax=meanCOTS+seCOTS, shape='Manta Tow'),
+                          fill="lightblue") +
+  geom_pointrange(data=dat.RHIS.Reef, 
+                  aes(x=Month+Offset, y=meanCOTS*4.4, ymin = (meanCOTS-seCOTS)*4.4, 
+                      ymax=(meanCOTS+seCOTS)*4.4, shape='RHIS'), fill="lightblue") +
+  scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_y_continuous(name= "Mean COTS per Manta Tow (+/- SE)",
+                     sec.axis = sec_axis(~./4.4, name = "Mean COTS per RHIS (+/- SE)")) +
+  scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = guide_legend(nrow=2, order = 1), shape = guide_legend(nrow=2, order = 0)) + 
+  facet_wrap(~ReefName, scales = "free_y")
+```
+
+# Modeling the effect of COTS density and culling activity on change in coral cover
+
+```{r, eval=TRUE, warning=F, message=F}
+# Calculate the percentage change at each site
+
+revisited = dat.RHIS.Site %>% group_by(COTSCullSite) %>% summarise(n= n()) %>% filter(n>1) %>% pull(COTSCullSite)
+# revisited = revisited[-1]
+dat.mod = dat.RHIS.Site %>% filter(COTSCullSite %in% revisited & nRHIS >2)
+revisited2 = dat.mod %>% group_by(COTSCullSite) %>% summarise(n= n()) %>% filter(n>1) %>% pull(COTSCullSite)
+dat.mod = dat.mod %>% filter(COTSCullSite %in% revisited2 & nRHIS >2)
+
+dat.RHIS2 = dat.RHIS %>% filter(COTSCullSite %in% revisited2) %>%
+  mutate(Month = as.yearmon(ObservationDate))
+dat.RHIS2$Month = as.Date(dat.RHIS2$Month)
+
+firstvisit = dat.mod %>% group_by(ReefName, COTSCullSite) %>% top_n(1, Month)
+lastvisit = dat.mod %>% group_by(ReefName, COTSCullSite) %>% top_n(-1, Month)
+
+dat.RHIS.Site2 = rbind(firstvisit, lastvisit) %>% rename(Sitename = "COTSCullSite")
+
+dat.mod = rbind(firstvisit, lastvisit) %>% arrange(ReefName, COTSCullSite, Month) %>%
+  group_by(ReefName, COTSCullSite) %>%
+  summarise(init.CC = first(meanHC),
+            init.N = first(nRHIS),
+            init.CC_SE = first(seHC),
+            init.CC_SD = first(sdHC),
+            after.CC = last(meanHC),
+            after.N = last(nRHIS),
+            after.CC_SE = last(seHC),
+            after.CC_SD = last(sdHC),
+            delta.CC = after.CC-init.CC,
+            init.CT = first(meanCOTS),
+            init.CT_SE = first(seCOTS),
+            after.CT = last(meanCOTS),
+            after.CT_SE = last(seCOTS),
+            delta.CT = after.CT, init.CT)
+
+dat.visits = rbind(firstvisit, lastvisit) %>% 
+  arrange(ReefName, COTSCullSite, Month) %>% 
+  select(ReefName, COTSCullSite, Month) %>%
+  mutate(Visit = rep(c(1,2)),
+         TimeBetween = lead(Month)-Month)
+# Filter RHIS for only first and last visit
+dat.RHIS2 = inner_join(dat.RHIS2, dat.visits) %>%
+  group_by(ReefName, COTSCullSite,Longitude, Latitude)  %>%
+  mutate(RHIS_ID = group_indices(.dots=c(ReefName, COTSCullSite,Longitude, Latitude))) 
+
+dat.mod2 = dat.RHIS2 %>% ungroup() %>% 
+  dplyr::select(ReefName, COTSCullSite, RHIS_ID, Visit, TimeBetween, BenthosLiveHardCoral, COTSSeenAdult) %>%
+  group_by(ReefName, COTSCullSite, RHIS_ID, Visit) %>%
+  summarise(HC = mean(BenthosLiveHardCoral),
+            CT = mean(COTSSeenAdult),
+            TimeBetween = mean(TimeBetween, na.rm=T)) %>%
+  gather(Variable, Value, -(ReefName:Visit)) %>%
+  unite(temp, Variable, Visit) %>%
+  tidyr::spread(temp, Value, drop=T)
+
+dat.mod2 = dat.mod2 %>% select(-TimeBetween_2) %>%
+  mutate(delta.CC = HC_2-HC_1) %>%
+  na.omit()
+
+
+
+dat.RHIS2.sum = dat.RHIS2 %>% 
+  group_by(ReefName, Visit) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral),
+            meanCT = mean(COTSSeenAdult))
+
+
+
+colnames(dat.mod)[2] = "Sitename"
+colnames(dat.mod2)[2] = "Sitename"
+
+# Comnine with data for Culling activity
+dat.CULL.site = dat.CULL %>%
+  filter(Sitename %in% unique(dat.mod$Sitename)) %>%
+  group_by(ReefName, Sitename) %>%
+  summarise(COTSCulled = sum(Total),
+            Effort = sum(Bottomtime),
+            Voyages =  length(unique(Voyage)))
+
+dat.CULL.first = dat.CULL %>%
+  filter(Sitename %in% unique(dat.mod$Sitename)) %>%
+  group_by(ReefName, Sitename, Voyage) %>%
+  summarise(Start = min(Surveydate),
+            COTSCulled = sum(Total),
+            Effort = sum(Bottomtime),
+            CPUE = COTSCulled/Effort) %>%
+  group_by(ReefName, Sitename) %>%
+  top_n(-1,Start) %>%
+  select(ReefName, Sitename, CPUE)
+  
+
+
+dat.mod = left_join(dat.mod, dat.CULL.site)
+dat.mod2 = left_join(dat.mod2, dat.CULL.site) %>% left_join(dat.CULL.first) 
+dat.mod2 = dat.mod2 %>% ungroup() %>%
+  mutate(COTSCulled.sc = scale(COTSCulled),
+         Voyages.sc = scale(Voyages),
+         CPUE.sc = scale(CPUE))
+```
+
+
+```{r, eval=FALSE}
+mod1 = nlme::lme(delta.CC~COTSCulled.sc*CPUE.sc, random = ~1|ReefName/Sitename, data = dat.mod2)
+mod2 = nlme::lme(delta.CC~COTSCulled*init.CT, random = ~1|ReefName, data = dat.mod)
+
+summary(mod1)
+summary(mod2)
+summary(lm(delta.CC~init.CT + COTSCulled + Voyages, data = dat.mod))
+```
+
+```{r Plot Site level Correlation, eval=F}
+dat.site.plot = dat.mod %>% 
+  dplyr::filter(init.CT == 0 & after.CT == 0 & !ReefName %in% REEFS[c(1,3,4)])
+ggplot(dat.site.plot, aes(x=init.CC, y=after.CC, fill=ReefName, color = ReefName)) +
+  geom_linerange(aes(x=init.CC, ymin=after.CC-after.CC_SE, ymax=after.CC+after.CC_SE), color = "grey") +
+  geom_errorbarh(aes(xmin=init.CC-init.CC_SE, xmax=init.CC+init.CC_SE), colour = "grey") +
+  geom_point() + 
+  geom_smooth(method="lm", color= "black") +
+  theme_light(base_size = 14)
+  
+
+# Add Reef Level estimate of Coral cover loss 
+dat.cor = dat.mod %>% group_by(ReefName) %>% summarise (mn_delta.CC = mean(delta.CC))
+dat.site.plot = dat.site.plot %>% left_join(dat.cor) %>% mutate(after.CC.cor = after.CC - mn_delta.CC)
+
+ggplot(dat.site.plot, aes(x=init.CC, y=after.CC.cor, fill=ReefName, color = ReefName)) +
+  geom_point() + 
+  geom_smooth(method="lm", color= "black")
+
+
+cor(dat.site.plot$after.CC, dat.site.plot$init.CC)
+lme1 = lm(after.CC~init.CC, weights = 1/init.CC, data = dat.site.plot)
+plot(lme1)
+summary(lme1)
+#Wedge shape --> fit weighted lm
+wts = 1/fitted(lm(abs(residuals(lme1)) ~ dat.site.plot$init.CC))
+
+lme2 = nlme::lme(after.CC~init.CC, random = ~1|ReefName, weights = ~init.CC ,data = dat.site.plot)
+plot(lme2)
+lme3 = nlme::lme(after.CC~init.CC, random = ~1|ReefName, weights = ~init.CC ,data = dat.site.plot)
+plot(lme3)
+
+anova(lme1, lme2, lme3, test = T)
+summary(lme2)
+summary(lme3)
+
+MuMIn::r.squaredGLMM(lme2)
+
+plot_grid(plot_model(lme2, type = "diag"))
+
+# Add Reef Level estimate of Coral cover loss 
+dat.cor = dat.mod %>% group_by(ReefName) %>% summarise (mn_delta.CC = mean(delta.CC))
+
+dat.site.plot = dat.site.plot %>% left_join(dat.cor) %>% mutate(init.CC.cor = after.CC - mn_delta.CC)
+```
+
+# Power Analysis 
+
+## Empirical Data {.tabset}
+
+Coral cover was estimated at our four reefs prior to culling at each site where COTS or COTS scars were observed. Coral cover estimates for a site are based on three replicate RHIS conducted at fixed GPS locations, aiming to create a site level estimate representing 1 Ha^-1^. Once a site has been *treated* (i.e. COTS have been culled below threshold levels) the cull site is closed and replicate RHIS are conducted again. This section highlights the estimated change in coral cover before and after culling activity and conducts a simple paired t test to determine whether the site level changes to coral cover are statistically significant. The results aim to show the magnitude of coral cover change required for RHIS to detect a significant change and also highlight the inherent variability in this survey technique.
+
+__NB RHIS may be conducted between the first and last observations, however for the purpose of this analysis we focus only on the before and after estimates to assess potential coral cove change.__
+
+```{r test change in coral cover at site level, results='hide'}
+ttests = dat.mod2 %>%
+  filter(!Sitename %in% names(which(table(dat.mod2$Sitename)<3))) %>%
+  group_by(ReefName, Sitename) %>%
+  do(tpvals = t.test(.$HC_1, .$HC_2, paired = T, alternative = "two.sided")) %>%
+  summarise(ReefName, Sitename, pvals = tpvals$p.value, 
+            delta = tpvals$estimate)
+
+
+SitePlot = function(REEF){
+  df = dat.RHIS.Site2 %>% filter(ReefName %in% REEFS[REEF] & Sitename %in% ttests$Sitename)
+  ttests2 = ttests %>% filter(Sitename %in% df$Sitename)
+  deltas = dat.mod %>% filter(Sitename %in% df$Sitename)  
+  pSite.1 = ggplot(df, aes(x=Month)) + 
+    coord_cartesian(ylim=c(0, 100),xlim =report_dates) +
+    # add manta tow rectangles 
+    theme_bw(base_size = 12)+ 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, hjust=1, vjust=0.5),
+          axis.title.x = element_blank(),
+          legend.title.align=0.5) +
+    # Add t-test values
+    geom_text(data=deltas, aes(x= as.Date("2019-04-01"), y=95, label= paste0("Delta = ", round(delta.CC, 2))), hjust=0) + 
+    geom_text(data=ttests2, aes(x= as.Date("2019-04-01"), y=85, label= paste0("P-val = ", round(pvals, 2))), hjust=0) + 
+    # add details for primary and secondary axis
+    scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                       sec.axis = sec_axis(~./40, name = "Mean COTS per RHIS (+/- SE)")) +
+    scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+    geom_hline(data=thresh, aes(yintercept = R*40, colour=factor(R, levels = c("0.024", "0.05", "0.24"))), size=1) +
+    geom_pointrange(data=df, aes(x=Month+Offset, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, fill = "a"),
+                        shape=22) +
+    geom_pointrange(aes(x=Month+Offset, y=meanCOTS*40, ymin = (meanCOTS-seCOTS)*40, ymax=(meanCOTS+seCOTS)*40, fill = "b"),
+                        shape=22, position = position_nudge(x=15))+
+    scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                            labels = c("Potential", "Established", "Severe")) +
+    scale_fill_manual(name = "Survey Type", values = c("coral", "purple"),
+                      labels = c("Coral Cover (%)", "COTS")) +
+    # scale_color_manual(name="RHIS Mean\nHard Coral Cover", values = "black", labels=element_blank()) +
+    guides(color = guide_legend(nrow =2, order = 2), fill = guide_legend(nrow =2, order = 1)) +          
+    facet_wrap(~Sitename, ncol = 3)
+}
+pSite.1 = SitePlot(1)
+pSite.2 = SitePlot(2)
+pSite.3 = SitePlot(3)
+pSite.4 = SitePlot(4)
+```
+
+### Farquharson Reef (No 1)
+
+```{r Plots of each Reef, out.width="100%", fig.height=7}
+pSite.1
+```
+
+### John Brewer Reef
+
+```{r, out.width="100%", fig.height=5}
+pSite.2
+```
+
+### Eddy Reef
+
+```{r, out.width="100%", fig.height=11}
+pSite.3
+```
+
+### Fore and Aft Reef
+
+```{r, out.width="100%", fig.height=17}
+pSite.4
+```
+
+## {-}
+
+### Significant differences observed by Change in Coral Cover
+
+```{r, warning=F, message=F}
+ttests = ttests %>%
+  mutate(Sig = ifelse(pvals<=0.05, "95%", ifelse(pvals<=0.1, "90%", "Not Significant")))
+ggplot(ttests %>% filter(delta<5), aes(y=pvals, x=abs(delta))) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial")) + 
+  geom_point(aes(colour = Sig)) +
+  coord_cartesian(xlim = c(0,50)) + theme_bw()
+
+ttests.Power = ttests %>%
+  mutate(Bin = plyr::round_any(abs(delta),10, f=ceiling)) %>%
+  filter(delta<5) %>%
+  group_by(Bin, Sig) %>%  tally() %>% spread(Sig, n) %>%
+  mutate(n = sum(`90%`, `95%`, `Not Significant`, na.rm=T),
+         nSig = sum(`90%`, `95%`, na.rm=T),
+         Power = round(nSig/n, 2)) %>%
+  select(n:Power)
+
+colnames(ttests.Power) = c("Change in Coral Cover", "n Sites", "n Significant Difference Observed", "Power")
+ttests.Power$`Change in Coral Cover` = c("0-10%", "10-20%","20-30%", "30-50%")
+
+knitr::kable(ttests.Power)
+```
+
+
+## Simulated Data {.tabset}
+
+```{r Power Analysis, cache=T, message=F, warning=F}
+# Find mean and standard deviation at a reef level
+dat.RHIS.Power = dat.RHIS %>% 
+  dplyr::filter(ReefName %in% REEFS) %>%
+  dplyr::filter(ObservationDate > figure_start_date) %>%
+  group_by(ReefName, COTSCullSite, Vessel) %>%
+  mutate(Month = zoo::as.yearmon(ObservationDate)) %>%
+  group_by(ReefName, COTSCullSite, Month) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral, na.rm = T),
+            nRHIS = n(),
+            sdHC = sd(BenthosLiveHardCoral, na.rm=T),
+            meanCOTS = mean(COTSSeenAdult, na.rm = T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) %>%
+  mutate(CoralCat =ifelse(meanHC<10,"0-10%",
+                        ifelse(meanHC <20, "10-20%",
+                          ifelse(meanHC <30, "20-30%", 
+                            ifelse(meanHC<40,"30-40%",
+                              ifelse(meanHC<50,"40-50%",
+                                     ifelse(meanHC<60,"50-60%",
+                                            ifelse(meanHC<70,"60-70%",
+                                                   ifelse(meanHC<80,"70-80%",">80%"))))))))) #%>%
+  # group_by(CoralCat) %>% 
+  # summarise(nSites = n(), meanSD = mean(sdHC, na.rm=T)) 
+  # #mutate(Month = zoo::as.yearmon(Month)) %>%
+  # ungroup() %>% group_by(ReefName) %>%
+  # summarise(meanHC = mean(meanHC), 
+  #           meanSD = mean(sdHC, na.rm=T))
+
+# plOt relationship between Mean and Standard Error at Site Level
+ggplot(dat.RHIS.Power, aes(x=meanHC, y=sdHC)) + geom_point() + geom_smooth(method="gam")
+weights = 1/dat.RHIS.Power$meanHC
+fit = lm(I(sdHC-0) ~ meanHC-1, dat.RHIS.Power, weights = weights)
+fit2 = lm(sdHC ~ meanHC, dat.RHIS.Power, weights = weights)
+plot(dat.RHIS.Power$meanHC, dat.RHIS.Power$sdHC)
+abline(0, coef(fit))
+summary(fit)
+AIC(fit, fit2)
+predSD = predict(fit2, newdata = data.frame(meanHC = seq(0,100, by=5)))                                    # Number of simulations to 
+predSD = data.frame(meanHC = seq(0,100, by=5), predSD)
+# conduct for each N
+```
+
+```{r cache=T, message=F, warning=F}
+power = function(from=2, to=100, alpha=0.05, sims=50, mn=30, sd=10, tau=5) {
+
+  possible.ns <- seq(from=from, to=to, by=1)         # The sample sizes we'll be considering
+  powers <- rep(NA, length(possible.ns))           # Empty object to collect simulation estimates
+  alpha <- alpha                                    # Standard significance level
+  sims <- sims                                      
+    
+  #### Outer loop to vary the number of subjects ####
+  for (j in 1:length(possible.ns)){
+    N <- possible.ns[j]                              # Pick the jth value for N
+    
+    significant.experiments <- rep(NA, sims)         # Empty object to count significant experiments
+    
+    #### Inner loop to conduct experiments "sims" times over for each N ####
+    for (i in 1:sims){
+      Y0 <-  rnorm(n=N, mean=mn, sd=sd)              # control potential outcome
+      tau <- tau                                      # Hypothesize treatment effect
+      Y1 <- Y0 + tau                                 # treatment potential outcome
+      Z.sim <- rbinom(n=N, size=1, prob=.5)          # Do a random assignment
+      Y.sim <- Y1*Z.sim + Y0*(1-Z.sim)               # Reveal outcomes according to assignment
+      try({fit.sim <- lm(Y.sim ~ Z.sim)})                   # Do analysis (Simple regression)
+      try({p.value <- summary(fit.sim)$coefficients[2,4]})  # Extract p-values
+      significant.experiments[i] <- (p.value <= alpha) # Determine significance according to p <= 0.05
+    }
+    
+    powers[j] <- mean(significant.experiments)       # store average success rate (power) for each N
+  }
+  return(data.frame(ns=possible.ns, power = powers))
+}
+
+# dfsim = data.frame(Y0, Y1, Y.sim, Z.sim)
+taus = seq(2,20, 4)
+ns = seq(from=2, to=100, by=1)
+
+dat.power.master = data.frame(ReefName = rep(dat.RHIS.Power$CoralCat, each = length(ns)),
+                              ns=rep(ns, 4), 
+                              matrix(nrow = length(ns*4), ncol = length(taus*4)))
+dat.power = data.frame(ns=ns, matrix(nrow = length(ns), ncol = length(taus)))
+
+# for (i in 1:length(taus)) {
+#   dat.power.master[1:length(ns),i+2] = power(mn=5, sd=dat.RHIS.Power$meanSD[1], tau=taus[i])$power
+#   dat.power.master[(length(ns)+1):(2*length(ns)),i+2] = power(mn=20, sd=dat.RHIS.Power$meanSD[2], tau=taus[i])$power
+#   dat.power.master[(2*length(ns)+1):(3*length(ns)),i+2] = power(mn=40, sd=dat.RHIS.Power$meanSD[3], tau=taus[i])$power
+#   dat.power.master[(3*length(ns)+1):(4*length(ns)),i+2] = power(mn=60, sd=dat.RHIS.Power$meanSD[4], tau=taus[i])$power
+# }
+# colnames(dat.power.master)[3:(length(taus)+2)] = paste0(taus, "%")
+# 
+# 
+# # Convert to long format for ggplot
+# 
+# dat.power.lng = dat.power.master %>% 
+#   tidyr::gather(3:7, key = "taus", value = "power")
+# dat.power.lng$taus = factor(dat.power.lng$taus, levels=paste0(taus, "%"))
+
+
+# p.Power = ggplot(dat.power.lng, aes(x=ns, y=power, fill=taus)) +
+#   geom_point(aes(colour = taus), alpha=0.5) +
+#   geom_smooth(aes(colour = taus)) +
+#   theme_bw(base_size = 14) +
+#   labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+#   facet_wrap(~ReefName)
+# p.Power
+
+
+power.t = function(M1, diff) {
+
+ M1  = M1                      # Mean for sample 1
+ M2  = ifelse((M1+diff)<0,0, (M1+diff))                       # Mean for sample 2
+ S1  =  predict(fit2, newdata = data.frame(meanHC=M1))                      # Std dev for sample 1
+ S2  =  predict(fit2, newdata = data.frame(meanHC=M2))                       # Std dev for sample 2
+
+ Cohen.d = (M1 - M2)/sqrt(((S1^2) + (S2^2))/2)  
+                                          
+ library(pwr)
+                                    
+ pwr.t =  pwr.t.test(
+        n = 1:100,                 # Observations in _each_ group
+        d = Cohen.d,            
+        sig.level = 0.05,          # Type I probability
+        power = NULL,              # 1 minus Type II probability
+        type = "paired",  
+        if(diff>0) {alternative = "less"} else
+          alternative = "greater"
+        )
+  return(data.frame(nPairs=1:100, SD = mean(S1,S2), meanHC=M1, deltaHC =diff, Pwer = pwr.t$power))
+  }  
+
+pwr.t = power.t(0,0)[-(1:100),]
+HCs = c(10,20,30,40,50)
+Diffs = c(-30,-25,-20,-15,-10,-5,-2,2,5,10,15,20,25,30)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t = rbind(pwr.t, power.t(HCs[i],Diffs[j]))
+  }
+}
+pwr.t.pos = pwr.t %>% filter(deltaHC >0)
+pwr.t.neg = pwr.t %>% filter(deltaHC <0)
+pwr.t.pos$meanHC = factor(pwr.t.pos$meanHC)
+pwr.t.pos$deltaHC = factor(pwr.t.pos$deltaHC)
+pwr.t.neg$meanHC = factor(pwr.t.neg$meanHC)
+pwr.t.neg$deltaHC = fct_rev(factor(pwr.t.neg$deltaHC))
+
+p.PowerPos = ggplot(pwr.t.pos %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover increase")
+p.PowerNeg = ggplot(pwr.t.neg %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  theme(axis.title.x = element_blank()) +
+  labs(y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover decline")
+```
+
+## Detecting Coral Cover Change
+
+```{r, message=F, warning=FALSE, out.width="100%", fig.height=8}
+# p.PowerNeg
+gridExtra::grid.arrange(p.PowerNeg, p.PowerPos)
+```
+
+
+# Reef Level Power Analysis
+
+```{r}
+dat.RHIS.ReefPower = dat.RHIS %>% 
+  dplyr::filter(ReefName %in% REEFS) %>%
+  dplyr::filter(ObservationDate > figure_start_date) %>%
+  group_by(ReefName, Vessel) %>%
+  mutate(Month = zoo::as.yearmon(ObservationDate)) %>%
+  group_by(ReefName, Month, Vessel) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral, na.rm = T),
+            nRHIS = n(),
+            sdHC = sd(BenthosLiveHardCoral, na.rm=T),
+            meanCOTS = mean(COTSSeenAdult, na.rm = T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) %>%
+  mutate(CoralCat =ifelse(meanHC<10,"0-10%",
+                        ifelse(meanHC <20, "10-20%",
+                          ifelse(meanHC <30, "20-30%", 
+                            ifelse(meanHC<40,"30-40%",
+                              ifelse(meanHC<50,"40-50%",
+                                     ifelse(meanHC<60,"50-60%",
+                                            ifelse(meanHC<70,"60-70%",
+                                                   ifelse(meanHC<80,"70-80%",">80%"))))))))) #%>%
+  # group_by(CoralCat) %>% 
+  # summarise(nSites = n(), meanSD = mean(sdHC, na.rm=T)) 
+  # #mutate(Month = zoo::as.yearmon(Month)) %>%
+  # ungroup() %>% group_by(ReefName) %>%
+  # summarise(meanHC = mean(meanHC), 
+  #           meanSD = mean(sdHC, na.rm=T))
+
+# plOt relationship between Mean and Standard Error at Site Level
+ggplot(dat.RHIS.ReefPower, aes(x=meanHC, y=sdHC)) + geom_point() + geom_smooth(method="gam")
+weights = 1/dat.RHIS.ReefPower$meanHC
+fit = lm(I(sdHC-0) ~ meanHC-1, dat.RHIS.ReefPower, weights = weights)
+fit2 = lm(sdHC ~ meanHC, dat.RHIS.ReefPower, weights = weights)
+AIC(fit, fit2)
+plot(dat.RHIS.ReefPower$meanHC, dat.RHIS.ReefPower$sdHC, )
+abline(coef(fit2)[1], coef(fit2)[2])
+summary(fit)
+
+predSD = predict(fit2, newdata = data.frame(meanHC = seq(0,100, by=5)))                                    # Number of simulations to 
+predSD = data.frame(meanHC = seq(0,100, by=5), predSD)
+# conduct for each N
+
+```
+
+```{r Reef Level Power}
+datmod.REEF = dat.mod2 %>%
+  filter(!Sitename %in% names(which(table(dat.mod2$Sitename)<3))) %>%
+  group_by(ReefName) %>%
+  summarise(HC1 = mean(HC_1),
+            HC2 = mean(HC_2),
+            seHC1 = sd(HC_1)/sqrt(n()),
+            seHC2 = sd(HC_2)/sqrt(n()),
+            meanCT1 = mean(CT_1),
+            meanCT2 = mean(CT_2),
+            COTSCulled = sum(COTSCulled)) %>%
+  mutate(delta.CC = HC2-HC1,
+         delta.CT = meanCT2-meanCT1,
+         Out.Stat1 = cut(meanCT1, breaks = c(-0.1,0.024, 0.05, 0.24, 100),
+                          labels = c("No Outbreak", "Potential", "Established", "Severe")),
+         Out.Stat2 = cut(meanCT2, breaks = c(-0.1,0.024, 0.05, 0.24, 100),
+                          labels = c("No Outbreak", "Potential", "Established", "Severe")))
+
+
+ttests.nSites = dat.mod2 %>%
+  filter(!Sitename %in% names(which(table(dat.mod2$Sitename)<3))) %>%
+  group_by(ReefName) %>% summarise(n=n())
+ttests.Reef = dat.mod2 %>%
+  filter(!Sitename %in% names(which(table(dat.mod2$Sitename)<3))) %>%
+  group_by(ReefName) %>%
+  do(tpvals = t.test(.$HC_2, .$HC_1, paired = T, alternative = "two.sided")) %>%
+  summarise(ReefName, pvals = round(tpvals$p.value,4), 
+            delta = round(tpvals$estimate, 2)) %>% left_join(ttests.nSites) %>%right_join(datmod.REEF)
+
+```
+
+```{r}
+power = function(from=2, to=100, alpha=0.05, sims=50, mn=30, sd=10, tau=5) {
+
+  possible.ns <- seq(from=from, to=to, by=1)         # The sample sizes we'll be considering
+  powers <- rep(NA, length(possible.ns))           # Empty object to collect simulation estimates
+  alpha <- alpha                                    # Standard significance level
+  sims <- sims                                      
+    
+  #### Outer loop to vary the number of subjects ####
+  for (j in 1:length(possible.ns)){
+    N <- possible.ns[j]                              # Pick the jth value for N
+    
+    significant.experiments <- rep(NA, sims)         # Empty object to count significant experiments
+    
+    #### Inner loop to conduct experiments "sims" times over for each N ####
+    for (i in 1:sims){
+      Y0 <-  rnorm(n=N, mean=mn, sd=sd)              # control potential outcome
+      tau <- tau                                      # Hypothesize treatment effect
+      Y1 <- Y0 + tau                                 # treatment potential outcome
+      Z.sim <- rbinom(n=N, size=1, prob=.5)          # Do a random assignment
+      Y.sim <- Y1*Z.sim + Y0*(1-Z.sim)               # Reveal outcomes according to assignment
+      try({fit.sim <- lm(Y.sim ~ Z.sim)})                   # Do analysis (Simple regression)
+      try({p.value <- summary(fit.sim)$coefficients[2,4]})  # Extract p-values
+      significant.experiments[i] <- (p.value <= alpha) # Determine significance according to p <= 0.05
+    }
+    
+    powers[j] <- mean(significant.experiments)       # store average success rate (power) for each N
+  }
+  return(data.frame(ns=possible.ns, power = powers))
+}
+
+# dfsim = data.frame(Y0, Y1, Y.sim, Z.sim)
+taus = seq(2,20, 4)
+ns = seq(from=2, to=100, by=1)
+
+dat.power.master = data.frame(ReefName = rep(dat.RHIS.Power$CoralCat, each = length(ns)),
+                              ns=rep(ns, 4), 
+                              matrix(nrow = length(ns*4), ncol = length(taus*4)))
+dat.power = data.frame(ns=ns, matrix(nrow = length(ns), ncol = length(taus)))
+
+# for (i in 1:length(taus)) {
+#   dat.power.master[1:length(ns),i+2] = power(mn=5, sd=dat.RHIS.Power$meanSD[1], tau=taus[i])$power
+#   dat.power.master[(length(ns)+1):(2*length(ns)),i+2] = power(mn=20, sd=dat.RHIS.Power$meanSD[2], tau=taus[i])$power
+#   dat.power.master[(2*length(ns)+1):(3*length(ns)),i+2] = power(mn=40, sd=dat.RHIS.Power$meanSD[3], tau=taus[i])$power
+#   dat.power.master[(3*length(ns)+1):(4*length(ns)),i+2] = power(mn=60, sd=dat.RHIS.Power$meanSD[4], tau=taus[i])$power
+# }
+# colnames(dat.power.master)[3:(length(taus)+2)] = paste0(taus, "%")
+# 
+# 
+# # Convert to long format for ggplot
+# 
+# dat.power.lng = dat.power.master %>% 
+#   tidyr::gather(3:7, key = "taus", value = "power")
+# dat.power.lng$taus = factor(dat.power.lng$taus, levels=paste0(taus, "%"))
+
+
+# p.Power = ggplot(dat.power.lng, aes(x=ns, y=power, fill=taus)) +
+#   geom_point(aes(colour = taus), alpha=0.5) +
+#   geom_smooth(aes(colour = taus)) +
+#   theme_bw(base_size = 14) +
+#   labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+#   facet_wrap(~ReefName)
+# p.Power
+
+
+power.t = function(M1, diff) {
+
+ M1  = M1                      # Mean for sample 1
+ M2  = ifelse((M1+diff)<0,0, (M1+diff))                       # Mean for sample 2
+ S1  =  predict(fit2, newdata = data.frame(meanHC=M1))                      # Std dev for sample 1
+ S2  =  predict(fit2, newdata = data.frame(meanHC=M2))                       # Std dev for sample 2
+
+ Cohen.d = (M1 - M2)/sqrt(((S1^2) + (S2^2))/2)  
+                                          
+ library(pwr)
+                                    
+ pwr.t =  pwr.t.test(
+        n = 1:100,                 # Observations in _each_ group
+        d = Cohen.d,            
+        sig.level = 0.05,          # Type I probability
+        power = NULL,              # 1 minus Type II probability
+        type = "two.sample",  
+        if(diff>0) {alternative = "less"} else
+          alternative = "greater"
+        )
+  return(data.frame(nPairs=1:100, SD = mean(S1,S2), meanHC=M1, deltaHC =diff, Pwer = pwr.t$power))
+  }  
+
+pwr.t = power.t(0,0)[-(1:100),]
+HCs = c(10,20,30,40,50)
+Diffs = c(-30,-25,-20,-15,-10,-5,-2,2,5,10,15,20,25,30)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t = rbind(pwr.t, power.t(HCs[i],Diffs[j]))
+  }
+}
+pwr.t.pos = pwr.t %>% filter(deltaHC >0)
+pwr.t.neg = pwr.t %>% filter(deltaHC <0)
+pwr.t.pos$meanHC = factor(pwr.t.pos$meanHC)
+pwr.t.pos$deltaHC = factor(pwr.t.pos$deltaHC)
+pwr.t.neg$meanHC = factor(pwr.t.neg$meanHC)
+pwr.t.neg$deltaHC = fct_rev(factor(pwr.t.neg$deltaHC))
+
+p.PowerPos = ggplot(pwr.t.pos %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover increase")
+p.PowerNeg = ggplot(pwr.t.neg %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  theme(axis.title.x = element_blank()) +
+  labs(y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover decline")
+
+```
+
+```{r, message=F, warning=FALSE, out.width="100%", fig.height=8}
+# p.PowerNeg
+gridExtra::grid.arrange(p.PowerNeg, p.PowerPos)
+```
+
+# FMP Methodology
+
+Fmp do randomly distributed RHIS whilst conducting manta tows around the perimeter of the reef. This means that we cannot make site level comparisons as there is no revisit to particular locations, estimtes of coral cover change are made at the reef level. We will look at the data from the paired reefs to ascertain the power of detecting coral cover change with RHIS at these locations.
+
+
+```{r}
+pairedReefs = dat.REEF %>% filter(!is.na(Paired)) %>% select(ReefName, Paired, Pairing) %>% arrange(Paired)
+dat.RHIS.Pair = dat.RHISFull %>% 
+  filter(ReefName %in% pairedReefs$ReefName &
+          ObservationDate > "2017-01-01" & 
+          Vessel %in% c("Reef Heron", "Reef Ranger", "Reef Ranger GBRMPA")) %>%
+  dplyr::select(1:11, Macroalgae, BenthosLiveSoftCoral, BenthosLiveHardCoral, 
+                BleachingPresentYN, COTSSeenAdult, COTSCullSite, Quarter, AdditionalInformation)
+
+dat.RHIS.PW = dat.RHIS.Pair %>% 
+  mutate(Year = year(ObservationDate)) %>% 
+  select(ReefName, BenthosLiveHardCoral, COTSSeenAdult,Year)
+
+
+tt.R.FMP = dat.RHIS.PW %>% 
+  group_by(ReefName) %>%
+  summarise_each(funs(t.test(.[Year==2017], .[Year==2018],paired = F, alternative = "two.sided")$p.value, 
+                      t.test(.[Year==2017], .[Year==2018],paired = F, alternative = "two.sided")$estimate[1]-
+                      t.test(.[Year==2017], .[Year==2018],paired = F, alternative = "two.sided")$estimate[2],
+                      t.test(.[Year==2018], .[Year==2019],paired = F, alternative = "two.sided")$p.value, 
+                      t.test(.[Year==2018], .[Year==2019],paired = F, alternative = "two.sided")$estimate[1]-
+                      t.test(.[Year==2018], .[Year==2019],paired = F, alternative = "two.sided")$estimate[2],
+                      t.test(.[Year==2017], .[Year==2019],paired = F, alternative = "two.sided")$p.value, 
+                      t.test(.[Year==2017], .[Year==2019],paired = F, alternative = "two.sided")$estimate[1]-
+                      t.test(.[Year==2017], .[Year==2019],paired = F, alternative = "two.sided")$estimate[2]), 
+                      BenthosLiveHardCoral) %>%
+  setNames(c("ReefName", "201718_pval", "201718_delta", "201819_pval", "201819_delta", "201719_pval", "201719_delta")) %>%
+  gather(key=variable, value = value, -ReefName) %>%
+  separate(variable, c("YearComp", "Var")) %>%
+  spread(key=Var, value = value)
+
+# PLot Significance
+tt.R.FMP = tt.R.FMP %>%
+  mutate(Sig = ifelse(pval<=0.05, "95%", ifelse(pval<=0.1, "90%", "Not Significant")),
+         Error = ifelse(delta <7, "Fine", "Probs Not"))
+
+tt.R.Power = tt.R.FMP %>%
+  mutate(Bin = plyr::round_any(abs(delta),5, f=ceiling)) %>%
+  filter(delta<7) %>%
+  group_by(Bin, Sig) %>%  tally() %>% spread(Sig, n) %>%
+  mutate(n = sum(`90%`, `95%`, `Not Significant`, na.rm=T),
+         nSig = sum(`95%`, na.rm=T),
+         Power = round(nSig/n, 2)) %>%
+  select(n:Power)
+
+colnames(tt.R.Power) = c("Change in Coral Cover", "n Sites", "n Significant Difference Observed", "Power")
+tt.R.Power$`Change in Coral Cover` = c("0-5%", "5-10%", "10-15%","15-20%","20-25%","25-30%")
+
+knitr::kable(tt.R.Power)
+
+ggplot(tt.R.FMP %>% filter(!YearComp %in% "201719"), aes(y=pval, x=abs(delta))) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial")) + 
+  geom_point(aes(colour = Sig)) +
+  coord_cartesian(xlim = c(0,30)) + theme_bw()
+
+
+ggplot() + 
+  geom_smooth(data=tt.R.FMP %>% filter(!YearComp %in% "201719" & !Error == "Probs Not"),
+              aes(y=pval, x=abs(delta)),method = "glm", 
+              method.args = list(family = "binomial")) + 
+  geom_point(data=tt.R.FMP %>% filter(!YearComp %in% "201719"), aes(y=pval, x=abs(delta), colour = Sig)) +
+  geom_point(data=tt.R.FMP %>% filter(Error == "Probs Not"), aes(y=pval, x=abs(delta)), color = "red") +
+  coord_cartesian(xlim = c(0,30)) + theme_bw()
+
+# Add obvious errors and significance bands 
+ggplot(ttests %>% filter(delta<5), aes(y=pvals, x=abs(delta))) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial")) + 
+  geom_point(aes(colour = Sig)) +
+  coord_cartesian(xlim = c(0,50)) + theme_bw()
+
+
+```
+
+## FMP Simulated Data
+
+```{r Reef Level}
+ggplot(dat.RHIS.PairS, aes(x=meanHC, y=sdHC)) + geom_point() +geom_smooth(method="lm")
+weights = 1/dat.RHIS.PairS$meanHC
+sdmod = lm(sdHC ~ meanHC-1, dat.RHIS.PairS, weights = weights)
+sdmod2 = lm(sdHC ~ meanHC, dat.RHIS.PairS, weights = weights)
+ggeffects::ggpredict(sdmod2, ~meanHC)  %>% 
+  plot(rawdata=TRUE,show.title=FALSE) +
+  scale_x_continuous('Mean HC')+
+  scale_y_continuous('SD HC')+
+  theme_bw()+
+  theme(axis.title.y=element_text(vjust=2, size=rel(1.5)),
+        axis.title.x=element_text(vjust=-1, size=rel(1.5)))
+AIC(sdmod,sdmod2)
+summary(sdmod)
+
+predict(sdmod2, newdata = data.frame(meanHC=0:60))
+
+TOSTER::TOSTtwo.raw(m1=25, m2=15, sd1 = 16.8, sd2 = 10.4, n1 = 18, n2= 18, 
+                    low_eqbound = 0, high_eqbound = 20, alpha=0.05, var.equal = T)
+```
+
+There are two aspects to identifying changes in coral. The first is the power to detect whether a change occured. The second is investigating equivalence. Equivalence testing is a statistical concpet which allows us to test whether two observations are statistically equivalent. We can use this to determine whether RHIS has the ability to tell us whether coral cover has stayed the same, as we cannot simply assume the lack of observing a difference measn that two observations are equivalent. Here I present the a range of different scenarios estimated from FMP data to highlight whether we can (1) observe a difference or (2) safely assume no change has occured.
+
+```{r FMP Equivalence}
+dat.mod.FMP  = dat.RHIS.PairS %>% 
+  arrange(ReefName, Year) %>%
+  group_by(ReefName) %>%
+  summarise(init.CC = first(meanHC),
+            init.N = first(nRHIS),
+            init.CC_SD = first(sdHC),
+            init.CC_SE = first(seHC),
+            after.CC = last(meanHC),
+            after.N = last(nRHIS),
+            after.CC_SD = last(sdHC),
+            after.CC_SE = last(seHC),
+            delta.CC = after.CC-init.CC)
+REEFS = as.character(dat.mod.FMP$ReefName)
+SITES = as.character(dat.mod$COTSCullSite)
+#
+for (REEF in 1:length(REEFS)) {
+  df = dat.mod.FMP %>% filter(ReefName %in% REEFS[REEF])
+  equiv = dat.mod.FMP %>% filter(ReefName %in% REEFS[REEF]) 
+  TOSTER::TOSTtwo.raw(m1=equiv$init.CC, m2=equiv$after.CC, sd1 = equiv$init.CC_SD, sd2 = equiv$after.CC_SD, 
+                      n1 = equiv$init.N, n2= equiv$after.N, 
+                    low_eqbound = -5, high_eqbound = 5, alpha=0.05, var.equal = F)
+}
+
+for (SITE in 1:length(SITES)) {
+  df = dat.mod %>% filter(COTSCullSite %in% SITES[SITE])
+  equiv = dat.mod %>% filter(COTSCullSite %in% SITES[SITE]) 
+  TOSTER::TOSTtwo.raw(m1=equiv$init.CC, m2=equiv$after.CC, sd1 = equiv$init.CC_SD, sd2 = equiv$after.CC_SD, 
+                      n1 = equiv$init.N, n2= equiv$after.N, 
+                    low_eqbound = -5, high_eqbound = 5, alpha=0.05, var.equal = F)
+}
+
+
+colnames(dat.mod)[2] = "Sitename"
+ggplot(dat.mod %>% left_join(ttests, by=c("ReefName", "Sitename")) %>% na.omit(), aes(x=delta.CC)) + 
+  geom_histogram(bins =15,colour="white", aes(fill=Sig)) + theme_bw() + 
+  xlab("% Estimated change in Coral Cover") +
+  ylab("Frequency")
+ggplot(dat.mod.FMP %>% left_join(tt.R.FMP, by=c("ReefName")), aes(x=delta.CC)) + 
+  annotate("rect", xmin=10, xmax=25, ymin=0,ymax=20, fill="red", alpha=0.3) +
+  geom_histogram(bins =15,colour="white", aes(fill=Sig)) + theme_bw() + 
+  xlab("% Estimated change in Coral Cover") +
+  ylab("Frequency") + xlim(c(-25,25)) 
+
+
+```
+
+
+```{r}
+power.t = function(M1, diff, sdmod) {
+
+ M1  = M1                      # Mean for sample 1
+ M2  = ifelse((M1+diff)<0,0, (M1+diff))                       # Mean for sample 2
+ S1  =  predict(sdmod, newdata = data.frame(meanHC=M1))                      # Std dev for sample 1
+ S2  =  predict(sdmod, newdata = data.frame(meanHC=M2))                       # Std dev for sample 2
+
+ Cohen.d = (M1 - M2)/sqrt(((S1^2) + (S2^2))/2)  
+                                          
+ library(pwr)
+                                    
+ pwr.t =  pwr.t.test(
+        n = 1:100,                 # Observations in _each_ group
+        d = Cohen.d,            
+        sig.level = 0.05,          # Type I probability
+        power = NULL,              # 1 minus Type II probability
+        type = "two.sample",  
+        if(diff>0) {alternative = "less"} else
+          alternative = "greater"
+        )
+  return(data.frame(nPairs=1:100, SD = mean(S1,S2), meanHC=M1, deltaHC =diff, Pwer = pwr.t$power))
+  }  
+
+pwr.t = power.t(0,0)[-(1:100),]
+HCs = c(10,20,30,40,50)
+Diffs = c(-30,-25,-20,-15,-10,-5,-2,2,5,10,15,20,25,30)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t = rbind(pwr.t, power.t(HCs[i],Diffs[j]))
+  }
+}
+pwr.t.pos = pwr.t %>% filter(deltaHC >0)
+pwr.t.neg = pwr.t %>% filter(deltaHC <0)
+pwr.t.pos$meanHC = factor(pwr.t.pos$meanHC)
+pwr.t.pos$deltaHC = factor(pwr.t.pos$deltaHC)
+pwr.t.neg$meanHC = factor(pwr.t.neg$meanHC)
+pwr.t.neg$deltaHC = fct_rev(factor(pwr.t.neg$deltaHC))
+
+p.PowerPos = ggplot(pwr.t.pos %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover increase")
+p.PowerNeg = ggplot(pwr.t.neg %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  theme(axis.title.x = element_blank()) +
+  labs(y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover decline")
+```
+
+
+```{r}
+
+# Summarise RHIS data at a reef level
+dat.RHIS.PairS = dat.RHIS.Pair %>% 
+  mutate(Year = year(ObservationDate)) %>%
+  group_by(ReefName, Year) %>%
+  summarise(meanHC = mean(BenthosLiveHardCoral, na.rm = T),
+            nRHIS = n(),
+            sdHC = sd(BenthosLiveHardCoral, na.rm = T),
+            seHC = sd(BenthosLiveHardCoral, na.rm=T)/sqrt(n()),
+            meanCOTS = mean(COTSSeenAdult, na.rm = T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) #%>%
+  # filter(nRHIS >=9)
+
+
+dat.RHIS.PairW = dat.RHIS.PairS %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+  mutate(deltaCC1 = meanHC_2018-meanHC_2017,
+         deltaCC2 = meanHC_2019-meanHC_2018,
+         deltaCCT = meanHC_2019-meanHC_2017,
+         propCC1 = deltaCC1/meanHC_2017,
+         propCCT = deltaCCT/meanHC_2017,
+         deltaCOTS1 = meanCOTS_2018-meanCOTS_2017,
+         deltaCOTS2 = meanCOTS_2019-meanCOTS_2018,
+         deltaCOTST = meanCOTS_2019-meanCOTS_2017,
+         propCOT1 = deltaCOTS1/meanCOTS_2017,
+         propCOTT = deltaCOTST/meanCOTS_2017,
+         Type="RHIS") %>% left_join(pairedReefs)
+
+
+
+
+dat.RHIS.Pair.Perm = dat.RHIS.Pair %>% filter (grepl("Perman", AdditionalInformation)) %>%
+  mutate(Year = year(ObservationDate)) 
+
+
+# Summarise culling data at a reef level
+dat.CULL.PairQ = dat.CULL %>% 
+  dplyr::filter(ReefName %in% pairedReefs$ReefName) %>%
+  dplyr::filter(Surveydate > "2017-01-01") %>%
+  mutate(CPUE=Total/Bottomtime) %>%
+  group_by(ReefName, Quarter, VoyageVessel) %>% 
+  mutate(VoyageStart = min(Surveydate),
+         Month = as.Date(as.yearmon(VoyageStart, "%Y %b"))) %>%
+  ungroup() %>%
+  group_by(ReefName, Quarter) %>%
+  summarise(TotalCots = sum(Total, na.rm = T),
+            MeanCPUE = mean(CPUE, na.rm =T),
+            sdCPUE = sd(CPUE, na.rm = T),
+            seCPUE = sdCPUE/sqrt(length(CPUE)),
+            Effort = sum(Bottomtime, na.rm = T),
+            CPUE = TotalCots/Effort, 
+            FirstCull = min(Surveydate))
+
+dat.CULL.Pair = dat.CULL %>% 
+  dplyr::filter(ReefName %in% pairedReefs$ReefName) %>%
+  dplyr::filter(Surveydate > "2017-01-01") %>%
+  mutate(CPUE=Total/Bottomtime) %>%
+  group_by(ReefName, Quarter, VoyageVessel) %>% 
+  mutate(VoyageStart = min(Surveydate),
+         Month = as.Date(as.yearmon(VoyageStart, "%Y %b"))) %>%
+  group_by(ReefName, Month, Sitename) %>%
+  summarise(TotalCots = sum(Total, na.rm = T),
+            MeanCPUE = mean(CPUE, na.rm =T),
+            sdCPUE = sd(CPUE, na.rm = T),
+            seCPUE = sdCPUE/sqrt(length(CPUE)),
+            Effort = sum(Bottomtime, na.rm = T),
+            CPUE = TotalCots/Effort, 
+            FirstCull = min(Surveydate))
+
+# add date offset to the dataframe
+dat.CULL.Pair$Offset = round(lubridate::days_in_month(dat.CULL.Pair$Month)/2,0)
+  
+# Summarise manta data at reef level
+dat.MANT.Pair = dat.MANT %>%
+  dplyr::filter(tolower(ReefName) %in% tolower(pairedReefs$ReefName)) %>%
+  dplyr::filter(TowDate > "2017-01-01" & grepl("FMP", VoyageVessel)) %>%
+  group_by(ReefName, VoyageVessel) %>%
+  mutate(VoyageStart = min(TowDate),
+         Year = year(TowDate),
+         YearQtr = yearqtr(Voyage)) %>%
+  group_by(ReefName, Year) %>%
+  summarise(meanHC = mean(HCNumber, na.rm = T),
+            n= n(),
+            meanCOTS = mean(COTSObserved, na.rm = T),
+            seCOTS = sd(COTSObserved, na.rm =T)/sqrt(n()),
+            seHC = sd(HCNumber, na.rm=T)/sqrt(n()),
+                # Creates min and max for the coloured rectangles
+            ymin = ifelse(meanHC <= 10, 0, 
+                          ifelse(meanHC <=30, 10, 
+                                 ifelse(meanHC <=50,30,
+                                        ifelse(meanHC <=75, 50, 75)))),
+            ymax = ifelse(meanHC <= 10, 10,
+                          ifelse(meanHC <=30, 30,
+                                 ifelse(meanHC <=50,50,
+                                        ifelse(meanHC <=75, 75, 100)))),
+            HCCat = ifelse(meanHC <= 10, "0-10%", 
+                           ifelse(meanHC <=30, "10-30%", 
+                                  ifelse(meanHC <=50,"30-50%",                                                    
+                                         ifelse(meanHC <=75, "50-75%", "75-100%")))))
+# add month and offset columns
+# dat.MANT.Reef$Month = as.Date(as.yearmon(dat.MANT.Reef$Month, "%Y %b"))
+# dat.MANT.Reef$Offset = lubridate::days_in_month(dat.MANT.Reef$Month)
+# convert the HCCat column to a factor and define the order of the levels - this ensures every category is diplayed in legends
+dat.MANT.Pair$HCCat = factor(dat.MANT.Pair$HCCat, levels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))
+  
+
+dat.MANT.Pair$ReefName = factor(dat.MANT.Pair$ReefName, levels = pairedReefs$ReefName)
+# Change month and Offset for plotting
+# dat.RHIS.Reef$Month = as.Date(as.yearmon(dat.RHIS.Reef$Month, "%Y %b"))
+# dat.RHIS.Reef$Offset = round(lubridate::days_in_month(dat.RHIS.Reef$Month)/2,0)
+# dat.RHIS.Site$Month = as.Date(as.yearmon(dat.RHIS.Site$Month, "%Y %b"))
+# dat.RHIS.Site$Offset = round(lubridate::days_in_month(dat.RHIS.Site$Month)/2,0)
+
+
+
+dat.RHIS.Pair$ReefName = factor(dat.RHIS.Pair$ReefName, levels = pairedReefs$ReefName)
+
+dat.MANT.PairW = dat.MANT.Pair %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+  mutate(deltaCC1 = meanHC_2018-meanHC_2017,
+         deltaCC2 = meanHC_2019-meanHC_2018,
+         deltaCCT = meanHC_2019-meanHC_2017,
+         propCC1 = deltaCC1/meanHC_2017,
+         propCCT = deltaCCT/meanHC_2017,
+         deltaCOTS1 = meanCOTS_2018-meanCOTS_2017,
+         deltaCOTS2 = meanCOTS_2019-meanCOTS_2018,
+         deltaCOTST = meanCOTS_2019-meanCOTS_2017,
+         propCOT1 = deltaCOTS1/meanCOTS_2017,
+         propCOTT = deltaCOTST/meanCOTS_2017,
+         Type="Manta") %>% left_join(pairedReefs)
+dat.RHIS.PairW = dat.RHIS.Pair %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+  mutate(deltaCC1 = meanHC_2018-meanHC_2017,
+         deltaCC2 = meanHC_2019-meanHC_2018,
+         deltaCCT = meanHC_2019-meanHC_2017,
+         propCC1 = deltaCC1/meanHC_2017,
+         propCCT = deltaCCT/meanHC_2017,
+         deltaCOTS1 = meanCOTS_2018-meanCOTS_2017,
+         deltaCOTS2 = meanCOTS_2019-meanCOTS_2018,
+         deltaCOTST = meanCOTS_2019-meanCOTS_2017,
+         propCOT1 = deltaCOTS1/meanCOTS_2017,
+         propCOTT = deltaCOTST/meanCOTS_2017,
+         Type="RHIS") %>% left_join(pairedReefs)
+dat= rbind(dat.RHIS.PairW, dat.MANT.PairW)
+
+```
+
+
+```{r}
+
+
+# COTS/Manta Tow
+ggplot(dat.MANT.Pair, aes(x=Year, y=meanCOTS)) + 
+  geom_hline(data=df1, aes(yintercept = thresh, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1) +
+  geom_pointrange(data=dat.MANT.Pair, aes(ymin = meanCOTS-seCOTS, ymax=meanCOTS+seCOTS, shape='Manta Tow'),
+                          fill="white", colour="black") +
+  geom_pointrange(data=dat.RHIS.PairS, 
+                  aes(x=Year+0.1, y=meanCOTS*4.4, ymin = (meanCOTS-seCOTS)*4.4, 
+                      ymax=(meanCOTS+seCOTS)*4.4, shape='RHIS'), fill="white", color="blue") +
+  scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_y_continuous(name= "Mean COTS per Manta Tow (+/- SE)",
+                     sec.axis = sec_axis(~./4.4, name = "Mean COTS per RHIS (+/- SE)")) +
+  # scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = guide_legend(nrow=2, order = 1), shape = guide_legend(nrow=2, order = 0)) + 
+  facet_wrap(~ReefName, scales = "free_y")
+```
+
+```{r}
+# Coral Cover
+ggplot(dat.MANT.Pair, aes(x=Year)) + 
+  coord_cartesian(ylim=c(0, 100)) +
+  # add manta tow rectangles 
+  geom_rect(aes(xmin=Year-0.25, xmax=Year+0.25, ymin=ymin,
+                ymax=ymax,  fill = HCCat), alpha=0.5) +
+  theme_bw(base_size = 12)+ 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                     sec.axis = sec_axis(~.*1, name = "Manta Tow Hard Coral Cover Category", 
+                                          breaks = c(5,20,40,62.5,87.5), 
+                                          labels=c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))) +
+  # scale_x_discrete(breaks = c(2017,2018,2019)) +
+  geom_pointrange(aes(x=Year, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, shape = ReefName, color='blah'),
+                      shape=22, fill="white") +
+  geom_pointrange(data=dat.RHIS.PairS, 
+                  aes(x=Year+0.1, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, color='blah2', shape=ReefName),
+                      shape=21, fill="white") +
+  scale_color_manual(name=c("RHIS Mean\nHard Coral Cover", "Manta Mean\nHard Coral Cover"), 
+                     values = c("black", "blue"), labels=element_blank()) +
+  scale_fill_manual(name = "Manta Tow Hard\nCoral Cover Category", 
+                    values = c("red", "orange", "yellow", "green", "darkgreen"),
+                    labels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"), drop=F) +
+  guides(color = guide_legend(order = 1), fill = guide_legend(nrow=2, order = 0)) +          
+  facet_wrap(~ReefName)
+
+
+# All Combined
+dat.PAIR = dat.MANT.Pair %>% left_join(dat.RHIS.PairS, by = c("ReefName", "Year"))
+dat.PAIR$Date = as.Date(paste(dat.PAIR$Year, 1, 1, sep = "-"))
+dat.CULL.PairQ$Date = as.Date(dat.CULL.PairQ$Quarter)
+dat.CULL.PairQ$EffortHrs = dat.CULL.PairQ$Effort/60
+
+ggplot(dat.PAIR, aes(x=Date)) + 
+  coord_cartesian(ylim=c(0, 50)) +
+  # add manta tow rectangles 
+  # geom_rect(aes(xmin=Date-180, xmax=Date+180, ymin=ymin,
+  #               ymax=ymax,  fill = HCCat), alpha=0.5) +
+  geom_col(data=dat.CULL.PairQ, aes(x=Date, y=EffortHrs/10), alpha = 0.3, colour="black") +
+  theme_bw(base_size = 12)+ 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  scale_y_continuous(name= , "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                     sec.axis = sec_axis(~.*0.02, name = "Mean COTS per Manta Tow (+/- SE)")) +
+  # scale_x_discrete(breaks = c(2017,2018,2019)) +
+  #Coral RHIS
+  geom_pointrange(aes(x=Date, y=meanHC.y, ymin = meanHC.y-seHC.y, ymax=meanHC.y+seHC.y, shape='blah'),
+                      fill="white") +
+  #COTS Manta
+  geom_pointrange(aes(x=Date+10, y=meanCOTS.x*25, ymin = meanCOTS.x*25-seCOTS.x*25, 
+                      ymax=meanCOTS.x*25+seCOTS.x*25,shape='blah2'),
+                      fill="white") +
+  geom_hline(data=df1, aes(yintercept = thresh*25, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1, alpha=0.5) +
+  scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_fill_manual(name = "Manta Tow Hard\nCoral Cover Category", 
+                    values = c("red", "orange", "yellow", "green", "darkgreen"),
+                    labels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"), drop=F) +
+  scale_shape_manual(name = "Observation Type", 
+                    values = c(22,19),
+                    labels = c("Coral (RHIS)", "COTS (Manta)"), drop=F) +
+  guides(color = guide_legend(order = 1, nrow=2), fill = guide_legend(nrow=2, order = 0),
+         shape = guide_legend(order = 2, nrow=2)) +          
+  facet_wrap(~ReefName)
+
+
+```
+
+```{r Pairings, eval=F}
+pairings = data.frame(Cull = c("Howie Reef (17-018a)", "Nathan Reef (17-035)", 
+                               "Noreaster Reef (17-062)", "Beaver Reef (17-051)", "Farquharson Reef (No 1) (17-063a)"),
+                      NoCull = c("Feather Reef (17-034)", "Taylor Reef (17-064)", "Walker Reef (18-026)",
+                                 "Yamacutta Reef (17-066)", "Potter Reef (No 1) (17-059a)"))
+
+
+for (i in 1:nrow(pairings)) {
+  p1 = ggplot(dat.MANT.Pair %>% filter(ReefName %in% c(as.character(pairings[i,1]), as.character(pairings[i,2]))), 
+              aes(x=Year)) + 
+  coord_cartesian(ylim=c(0, 50)) +
+  # add manta tow rectangles 
+  geom_rect(aes(xmin=Year-0.25, xmax=Year+0.25, ymin=ymin,
+                ymax=ymax,  fill = HCCat), alpha=0.5) +
+  theme_bw(base_size = 14)+ 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                     sec.axis = sec_axis(~.*1, name = "Manta Tow Hard Coral Cover Category", 
+                                          breaks = c(5,20,40,62.5,87.5), 
+                                          labels=c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))) +
+  # scale_x_discrete(breaks = c(2017,2018,2019)) +
+  geom_pointrange(aes(x=Year, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, shape = "Manta Tow"),
+                      fill="white", color="black") +
+  geom_pointrange(data=dat.RHIS.Pair %>%
+                    filter(ReefName %in% c(as.character(pairings[i,1]), as.character(pairings[i,2]))), 
+                  aes(x=Year+0.1, y=meanHC, ymin = meanHC-seHC, ymax=meanHC+seHC, shape="RHIS"),
+                      fill="white", colour="blue") +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_fill_manual(name = "Manta Tow Hard\nCoral Cover Category", 
+                    values = c("red", "orange", "yellow", "green", "darkgreen"),
+                    labels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"), drop=F) +
+  guides(shape = guide_legend(order = 0, nrow=2), fill = guide_legend(nrow=2, order = 1)) +          
+  facet_wrap(~ReefName, ncol=2)
+  
+  p2 = ggplot(dat.MANT.Pair %>% 
+                filter(ReefName %in% c(as.character(pairings[i,1]), as.character(pairings[i,2]))), 
+              aes(x=Year, y=meanCOTS)) + 
+  geom_hline(data=df1, aes(yintercept = thresh, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1) +
+  geom_pointrange(data=dat.MANT.Pair %>% filter(ReefName %in% c(as.character(pairings[i,1]), as.character(pairings[i,2]))), 
+                  aes(ymin = meanCOTS-seCOTS, ymax=meanCOTS+seCOTS, shape='Manta Tow'),
+                          fill="white", colour="black") +
+  geom_pointrange(data=dat.RHIS.Pair %>% filter(ReefName %in% c(as.character(pairings[i,1]), as.character(pairings[i,2]))), 
+                  aes(x=Year+0.1, y=meanCOTS*4.4, ymin = (meanCOTS-seCOTS)*4.4, 
+                      ymax=(meanCOTS+seCOTS)*4.4, shape='RHIS'), fill="white", color="blue") +
+  scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_y_continuous(name= "Mean COTS per Manta Tow (+/- SE)",
+                     sec.axis = sec_axis(~./4.4, name = "Mean COTS per RHIS (+/- SE)")) +
+  # scale_x_date(breaks = date.offset2, date_labels = "%Y %b") +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = guide_legend(nrow=2, order = 1), shape = guide_legend(nrow=2, order = 0)) + 
+  facet_wrap(~ReefName, scales = "free_y", ncol=2)
+
+g = gridExtra::arrangeGrob(p1,p2, ncol=1)
+ggsave(filename=paste0("PairReefFigs/", i, ".jpeg"),plot = g, device = "jpeg", dpi = 300, width = 8, height = 9)
+}
+
+```
+
+```{r Paired Wide, eval = FALSE}
+dat.MANT.PairW = dat.MANT.Pair %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+  mutate(deltaCC1 = meanHC_2018-meanHC_2017,
+         deltaCC2 = meanHC_2019-meanHC_2018,
+         deltaCCT = meanHC_2019-meanHC_2017,
+         propCC1 = deltaCC1/meanHC_2017,
+         propCCT = deltaCCT/meanHC_2017,
+         deltaCOTS1 = meanCOTS_2018-meanCOTS_2017,
+         deltaCOTS2 = meanCOTS_2019-meanCOTS_2018,
+         deltaCOTST = meanCOTS_2019-meanCOTS_2017,
+         propCOT1 = deltaCOTS1/meanCOTS_2017,
+         propCOTT = deltaCOTST/meanCOTS_2017,
+         Type="Manta") %>% left_join(pairedReefs)
+dat.RHIS.PairW = dat.RHIS.Pair %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+  mutate(deltaCC1 = meanHC_2018-meanHC_2017,
+         deltaCC2 = meanHC_2019-meanHC_2018,
+         deltaCCT = meanHC_2019-meanHC_2017,
+         propCC1 = deltaCC1/meanHC_2017,
+         propCCT = deltaCCT/meanHC_2017,
+         deltaCOTS1 = meanCOTS_2018-meanCOTS_2017,
+         deltaCOTS2 = meanCOTS_2019-meanCOTS_2018,
+         deltaCOTST = meanCOTS_2019-meanCOTS_2017,
+         propCOT1 = deltaCOTS1/meanCOTS_2017,
+         propCOTT = deltaCOTST/meanCOTS_2017,
+         Type="RHIS") %>% left_join(pairedReefs)
+dat= rbind(dat.RHIS.PairW, dat.MANT.PairW)
+
+dat %>% 
+  group_by(ReefName) %>% 
+  summarise(meanHC_2017 = mean(meanHC_2017),
+            meanHC_2019 = mean(meanHC_2019)) %>%
+  mutate(deltaCCT = meanHC_2019-meanHC_2017) %>% 
+  left_join(pairedReefs) %>% 
+  group_by(Paired) %>% 
+  summarise(meanDelta = mean(deltaCCT))
+
+dat.RHIS.Perm = dat.RHIS.Pair.Perm %>% select(ReefName, meanHC, meanCOTS,Year) %>% 
+  pivot_wider(id_cols = ReefName, 
+            names_from = Year, 
+            values_from = c("meanHC", "meanCOTS")) %>%
+
+
+
+```
+
+
+```{r, eval=FALSE}
+ggplot(dat.MANT.PairW %>% filter(meanHC_2017 >9 & meanCOTS_2017 <3 & meanCOTS_2017 >0), 
+       aes(x=meanCOTS_2017, propCCT,colour = Paired)) + geom_point() + geom_smooth(method = "lm")
+
+ggplot(dat.MANT.PairW %>% filter(meanHC_2017 >9 & meanCOTS_2017 <3 & meanCOTS_2017 >0), 
+       aes(x=meanCOTS_2017, propCOTT,colour = Paired)) + geom_point() + geom_smooth(method = "lm")
+dat = dat.RHIS.PairW %>% filter(meanHC_2017 >5 & meanCOTS_2017 <3 & meanCOTS_2017 >0)
+
+lm = lm(propCCT ~ meanCOTS_2017*meanHC_2017 + Paired*meanCOTS_2017 + meanCOTS_2017:meanHC_2017:Paired, 
+        data = dat)
+summary(lm)
+lm1 = lm(propCCT ~ meanCOTS_2017*meanHC_2017 + Paired*meanCOTS_2017 + meanCOTS_2017:meanHC_2017:Paired, 
+        data = dat)
+summary(lm1)
+
+pred <- expand.grid(meanHC_2017=c(min(dat$meanHC_2017),median(dat$meanHC_2017),max(dat$meanHC_2017)),
+                    meanCOTS_2017=c(min(dat$meanCOTS_2017),median(dat$meanCOTS_2017),max(dat$meanCOTS_2017)),Paired=levels(dat$Paired))
+pred$propCCT <- predict(lm1,pred)
+
+ggplot(dat,aes(x=meanCOTS_2017,y=propCCT,color=meanHC_2017))+
+  geom_point()+
+  facet_grid(~Paired)+
+  geom_line(data=pred,aes(group=meanHC_2017))
+
+plot(lm1)
+
+
+
+library(lsmeans)
+lsmeans(lm, ~meanCOTS_2017|Paired, adjust="tukey")
+
+dat.RHIS.Pair.Perm = dat.RHIS.Pair.Perm %>% arrange(ReefName, Latitude, Longitude, Year)
+dat.RHIS.Pair.Perm$ID = cumsum(!duplicated(dat.RHIS.Pair.Perm[,c(6,8,9)]))
+dat.RHIS.PairW = dat.RHIS.Pair.Perm %>% select(ReefName, Year, COTSSeenAdult,ID, BenthosLiveHardCoral) %>% 
+  pivot_wider(id_cols = c(ReefName, ID), 
+            names_from = Year, 
+            values_from = c("BenthosLiveHardCoral", "COTSSeenAdult"))
+
+```
+
+```{r, eval=FALSE}
+dMP = dat.MANT.Pair %>% left_join(pairedReefs) %>% group_by(Paired, Year) %>%
+  summarise(MeanHC=mean(meanHC),
+            seHC = sd(meanHC)/sqrt(n()),
+            MeanCOTS = mean(meanCOTS, na.rm = T),
+            seCOTS = sd(meanCOTS, na.rm =T)/sqrt(n()),
+            ymin = ifelse(MeanHC <= 10, 0, 
+                          ifelse(MeanHC <=30, 10, 
+                                 ifelse(MeanHC <=50,30,
+                                        ifelse(MeanHC <=75, 50, 75)))),
+            ymax = ifelse(MeanHC <= 10, 10,
+                          ifelse(MeanHC <=30, 30,
+                                 ifelse(MeanHC <=50,50,
+                                        ifelse(MeanHC <=75, 75, 100)))),
+            HCCat = ifelse(MeanHC <= 10, "0-10%", 
+                           ifelse(MeanHC <=30, "10-30%", 
+                                  ifelse(MeanHC <=50,"30-50%",                                                    
+                                         ifelse(MeanHC <=75, "50-75%", "75-100%")))))
+# add month an)
+
+dRP = dat.RHIS.Pair %>% left_join(pairedReefs) %>% group_by(Paired, Year) %>%
+  summarise(MeanHC=mean(meanHC),
+            seHC = sd(meanHC)/sqrt(n()),
+            MeanCOTS = mean(meanCOTS, na.rm = T),
+            seCOTS = sd(meanCOTS, na.rm =T)/sqrt(n()),
+            ymin = ifelse(MeanHC <= 10, 0, 
+                          ifelse(MeanHC <=30, 10, 
+                                 ifelse(MeanHC <=50,30,
+                                        ifelse(MeanHC <=75, 50, 75)))),
+            ymax = ifelse(MeanHC <= 10, 10,
+                          ifelse(MeanHC <=30, 30,
+                                 ifelse(MeanHC <=50,50,
+                                        ifelse(MeanHC <=75, 75, 100)))),
+            HCCat = ifelse(MeanHC <= 10, "0-10%", 
+                           ifelse(MeanHC <=30, "10-30%", 
+                                  ifelse(MeanHC <=50,"30-50%",                                                    
+                                         ifelse(MeanHC <=75, "50-75%", "75-100%")))))
+
+p1 = ggplot(dMP, aes(x=Year)) + 
+  coord_cartesian(ylim=c(0, 100)) +
+  # add manta tow rectangles 
+  geom_rect(aes(xmin=Year-0.25, xmax=Year+0.25, ymin=ymin,
+                ymax=ymax,  fill = HCCat), alpha=0.5) +
+  theme_bw(base_size = 14)+ 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+                     sec.axis = sec_axis(~.*1, name = "Manta Tow Hard Coral Cover Category", 
+                                          breaks = c(5,20,40,62.5,87.5), 
+                                          labels=c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))) +
+  # scale_x_discrete(breaks = c(2017,2018,2019)) +
+  geom_pointrange(aes(x=Year, y=MeanHC, ymin = MeanHC-seHC, ymax=MeanHC+seHC, shape = 'Manta Tow'),
+                    fill="white", color="black") +
+  geom_pointrange(data=dRP, 
+                  aes(x=Year+0.1, y=MeanHC, ymin = MeanHC-seHC, ymax=MeanHC+seHC, shape='RHIS'),
+                    fill="white", colour="blue") +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_x_continuous(breaks = c(2017, 2018, 2019)) +
+  scale_fill_manual(name = "Manta Tow Hard\nCoral Cover Category", 
+                    values = c("red", "orange", "yellow", "green", "darkgreen"),
+                    labels = c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"), drop=F) +
+  guides(shape = guide_legend(nrow=2, order = 0), fill = guide_legend(nrow=2, order = 1)) +          
+  facet_wrap(~Paired)
+
+# COTS/Manta Tow
+p2 = ggplot(dMP, aes(x=Year, y=MeanCOTS)) + 
+  geom_hline(data=df1, aes(yintercept = thresh, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1) +
+  geom_pointrange(data=dMP, aes(ymin = MeanCOTS-seCOTS, ymax=MeanCOTS+seCOTS, shape='Manta Tow'),
+                          fill="white", colour="black") +
+  geom_pointrange(data=dRP, 
+                  aes(x=Year+0.1, y=MeanCOTS*4.4, ymin = (MeanCOTS-seCOTS)*4.4, 
+                      ymax=(MeanCOTS+seCOTS)*4.4, shape='RHIS'), fill="white", color="blue") +
+  scale_colour_manual(name = "Outbreak Thresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_shape_manual(name = "Observation Type", values = 21:22) +
+  scale_y_continuous(name= "Mean COTS per Manta Tow (+/- SE)",
+                     sec.axis = sec_axis(~./4.4, name = "Mean COTS per RHIS (+/- SE)")) +
+  scale_x_continuous(breaks = c(2017, 2018, 2019)) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = guide_legend(nrow=2, order = 1), shape = guide_legend(nrow=2, order = 0)) + 
+  facet_wrap(~Paired, scales = "free_y")
+
+dat.MANT.Pair$HCCat2 =  cut(dat.MANT.Pair$meanHC, breaks = c(0,5, 10, 20, 30,50, 75),
+                          labels = c("0-5%", "5-10%", "10-20%", "20-30%", "30-50%", "50-75%"))
+dat.MANT.Pair$Out = cut(dat.MANT.Pair$meanCOTS, breaks = c(-0.1,0.024, 0.05, 0.24, 100),
+                          labels = c("No Outbreak", "Potential", "Established", "Severe"))     
+
+dat.CULL.Pair$Quarter = as.yearqtr(dat.CULL.Pair$Month)
+
+dCP = dat.CULL.Pair %>% left_join(pairedReefs) %>% 
+  group_by(Paired, Quarter) %>%
+  summarise(TotalEffort = sum(Effort),
+            TotalCOTS = sum(TotalCots),
+            TotalCPUE = TotalCOTS/TotalEffort) #%>%
+  # left_join(dat.MANT.Pair %>% filter(Year==2017) %>%
+  #             # select(ReefName, Out)) 
+
+
+p5= ggplot(dCP %>% filter(!Out %in% c("No Outbreak")), aes(x=Quarter, y=TotalEffort/60)) + 
+  geom_bar(color="black",stat="identity") +facet_wrap(~ReefName) +
+  scale_x_continuous(breaks = c(2017,2018, 2019)) + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  # scale_fill_manual(values = c("green", "yellow","orange", "red")) + 
+  theme_bw(base_size = 14) + xlab("Date") + ylab("Total Effort (Hrs)")
+
+p6= ggplot(dCP, aes(x=Quarter, y=TotalEffort/60, fill=Paired)) + 
+  geom_bar(color="black",stat="identity") +
+  scale_x_continuous(breaks = c(2017,2018, 2019)) + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  # scale_fill_manual(values = c("green", "yellow","orange", "red")) + 
+  theme_bw(base_size = 14) + xlab("Date") + ylab("Total Effort (Hrs)")
+
+ggplot(dat.MANT.Pair %>% left_join(pairedReefs) %>%
+         filter(Year==2017), aes(y=Pairing, x=Paired)) +geom_tile(aes(fill=HCCat2), alpha=0.5) + ggtitle("Coral Cover") +
+  scale_fill_manual(values = c("red", "orange", "yellow", "lightgreen")) +
+  theme_bw() 
+
+p3 = ggplot(dat.MANT.Pair %>% left_join(pairedReefs) %>%
+         filter(Year==2017), aes(y=Pairing, x=Paired)) +geom_tile(aes(fill=HCCat), alpha=0.5) + ggtitle("Coral Cover") +
+  scale_fill_manual(name="Manta Tow Hard\nCoral Cover Category", values = c("red", "orange")) + theme_bw(base_size = 14) +
+  xlab("Culling Activity")
+
+p4 = ggplot(dat.MANT.Pair %>% left_join(pairedReefs) %>%
+         filter(Year==2017), aes(y=Pairing, x=Paired)) +geom_tile(aes(fill=Out), alpha=0.5) + ggtitle("COTS Outbreaks") +
+  scale_fill_manual(name="Outbreak Status",values = c("green", "yellow","orange", "red")) + theme_bw(base_size = 14) +
+  xlab("Culling Activity")
+
+#+ facet_wrap(~Paired)
+ggsave(filename="Paired_CC.jpeg",plot = p1, device = "jpeg", dpi = 300, width = 8, height = 6)
+ggsave(filename="Paired_CULL.jpeg",plot = p5, device = "jpeg", dpi = 300, width = 8, height = 6)
+ggsave(filename="Paired_COTS.jpeg",plot = p2, device = "jpeg", dpi = 300, width = 8, height = 6)
+ggsave(filename="Paired_CC2.jpeg",plot = p3, device = "jpeg", dpi = 300, width = 8, height = 6)
+ggsave(filename="Paired_COTS2.jpeg",plot = p4, device = "jpeg", dpi = 300, width = 8, height = 6)
+```
+
+
+```{r, eval=FALSE}
+p1 = ggplot(dMP, aes(x=Year, y=MeanCOTS)) + 
+  geom_hline(data=df1, aes(yintercept = thresh, colour=factor(thresh, levels = c("0.11", "0.22", "1"))), size=1) +
+  geom_pointrange(data=dMP, aes(ymin = MeanCOTS-seCOTS, ymax=MeanCOTS+seCOTS, fill=Paired),
+                  colour="black",shape=21, alpha=0.9, position = position_dodge2(width=0.1), size=0.7) +
+  # geom_pointrange(data=dRP, 
+  #                 aes(x=Year+0.1, y=MeanCOTS*4.4, ymin = (MeanCOTS-seCOTS)*4.4, 
+  #                     ymax=(MeanCOTS+seCOTS)*4.4, shape='RHIS'), fill="white", color="blue") +
+  scale_colour_manual(name = "Outbreak\nThresholds", values = c("yellow", "orange", "red"),
+                          labels = c("Potential", "Established", "Severe")) +
+  scale_fill_manual(name = "Pairing", values = c("orange", "lightgreen")) +
+  # scale_y_continuous(name= "Mean COTS per Manta Tow (+/- SE)",
+  #                    sec.axis = sec_axis(~./4.4, name = "Mean COTS per RHIS (+/- SE)")) +
+  scale_x_continuous(breaks = c(2017, 2018, 2019)) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "right",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = guide_legend(order = 1), shape = guide_legend(order = 0)) + ylab("Mean COTS/Manta Tow")
+
+p2 = ggplot(dRP, aes(x=Year)) + 
+  coord_cartesian(ylim=c(0, 40)) +
+  # add manta tow rectangles 
+  # geom_rect(aes(xmin=Year-0.25, xmax=Year+0.25, ymin=ymin,
+  #               ymax=ymax,  fill = HCCat), alpha=0.5) +
+  theme_bw(base_size = 14)+ 
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 45, hjust=1, vjust=1),
+        axis.title.x = element_blank(),
+        legend.title.align=0.5) +
+  # add details for primary and secondary axis
+  # scale_y_continuous(name= "RHIS Mean Hard Coral Cover (+/- SE) [%]",
+  #                    sec.axis = sec_axis(~.*1, name = "Manta Tow Hard Coral Cover Category", 
+  #                                         breaks = c(5,20,40,62.5,87.5), 
+  #                                         labels=c("0-10%", "10-30%", "30-50%", "50-75%", "75-100%"))) +
+  # # scale_x_discrete(breaks = c(2017,2018,2019)) +
+  geom_pointrange(aes(x=Year, y=MeanHC, ymin = MeanHC-seHC, ymax=MeanHC+seHC, fill = Paired),
+                    shape=21, color="black", position = position_dodge2(width = 0.1), size=0.9) +
+  xlab("Year") + ylab("Mean Hard Coral Cover % (RHIS)") +
+  scale_fill_manual(name = "Pairing", values = c("orange", "lightgreen")) +
+  scale_x_continuous(breaks = c(2017, 2018, 2019)) +
+  guides(shape = guide_legend(order = 0), fill = guide_legend( order = 1))
+p6 = p6 + scale_fill_manual(name = "Pairing", values = c("orange", "lightgreen"))
+p6
+
+gs = gridExtra::arrangeGrob(grobs=list(p1, p2, p6), layout.matrix = rbind(c(1,2),
+                                                          c(3,3)))
+
+g1 = gridExtra::arrangeGrob(grobs=list(p1, p2, p6))
+ggsave(filename="Paired_Graphs.jpeg",plot=g1, device = "jpeg", dpi = 300, width = 8, height = 12)
+```
+
+
+# Recomendations

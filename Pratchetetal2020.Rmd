@@ -1,11 +1,18 @@
 ---
-title: "Pratchett et al 2020"
+title: "Pratchett et al 2020: Temporal and Spatial Dynamics of Butterflyfish populations at Lizard Island 1995-2020"
 author: "Samuel Matthews"
-date: "9 February 2020"
-output: html_document
+date: "18 February 2020"
+output: 
+  html_document:
+    toc: TRUE
+    theme: cerulean
+    highlight: tango
+    number_sections: FALSE
+    code_folding: hide
+    toc_float: TRUE
+    collapsed: FALSE
+    smooth_scroll: TRUE
 ---
-
-# Temporal and Spatial Dynamics of Butterflyfish populations at Lizard Island 1995-2020
 
 This analysis will focus on the temporal and habitat trends of Buttterfy fish populations. 
 
@@ -14,17 +21,27 @@ This analysis will focus on the temporal and habitat trends of Buttterfy fish po
 3. Identification of Specialist/Generalist species across habitats
 3. Coral Community Analysis
 
-## 1. Temporal trends
+# 1. Temporal trends
 
-First job is to calcualte, richness, evenness, and total abundance with respect to different feeding groups.
 
-```{r Setup}
+```{r Setup, echo=F, warning=FALSE, results='hide', message=FALSE}
 library(tidyverse)
 library(plyr)
 library(vegan)
+
 # Load Data
 butt = read.csv("ButterflyfishLizardIsland95-20.csv", header=T)
+cor = read.csv("Coral Data Lizard Island 95-20.csv", header=T)
 
+cor.perc = cor %>% 
+  mutate_at(vars(-c(1:9)), funs(.*100 / DivideBy))
+
+cor.perc$Zone = factor(substring(cor.perc$Zone, 4))
+cor.perc$Site = factor(substring(cor.perc$Site, 4))
+
+butt$site = plyr::mapvalues(butt$site, from = c("LH", "NR", "SI", "WM"), 
+                      to = c("Lizard Head", "North Reef", "South Island","Washing Machine"))
+colnames(butt)[3:4] = c("Site", "Zone")
 # create long format of data for plotting
 butt.long = butt %>% 
   # dplyr::select(1:27) %>%
@@ -32,7 +49,38 @@ butt.long = butt %>%
   separate(Species, c("Diet", "Species"), sep = 5) %>%
   mutate(Diet = gsub("[[:punct:]]", "", Diet))
 
+cor.long = cor.perc %>% 
+  tidyr::gather(key = "Species", value = "Number", -c(1:9, 83))
 
+cor.sum = cor.perc %>%
+  group_by(Year) %>%
+  dplyr::summarise(n = dplyr::n(),
+            MeanHC = mean(Hard.Coral.Cover, na.rm=T),
+            SEHC = sd(Hard.Coral.Cover, na.rm=T)/sqrt(n),
+            MeanSC = mean(Total.soft.coral, na.rm=T),
+            SESC = sd(Total.soft.coral, na.rm=T)/sqrt(n))
+cor.sum_Z = cor.perc %>%
+  group_by(Year, Zone) %>%
+  dplyr::summarise(n = dplyr::n(),
+            MeanHC = mean(Hard.Coral.Cover, na.rm=T),
+            SEHC = sd(Hard.Coral.Cover, na.rm=T)/sqrt(n),
+            MeanSC = mean(Total.soft.coral, na.rm=T),
+            SESC = sd(Total.soft.coral, na.rm=T)/sqrt(n))
+cor.sum_ZS = cor.perc %>%
+  group_by(Year,Site, Zone) %>%
+  dplyr::summarise(n = dplyr::n(),
+            MeanHC = mean(Hard.Coral.Cover, na.rm=T),
+            SEHC = sd(Hard.Coral.Cover, na.rm=T)/sqrt(n),
+            MeanSC = mean(Total.soft.coral, na.rm=T),
+            SESC = sd(Total.soft.coral, na.rm=T)/sqrt(n))
+cor.sum_S = cor.perc %>%
+  group_by(Year,Site) %>%
+  dplyr::summarise(n = dplyr::n(),
+            MeanHC = mean(Hard.Coral.Cover, na.rm=T),
+            SEHC = sd(Hard.Coral.Cover, na.rm=T)/sqrt(n),
+            MeanSC = mean(Total.soft.coral, na.rm=T),
+            SESC = sd(Total.soft.coral, na.rm=T)/sqrt(n))
+  
 # Calculate RICHNESS, evenness, Diveristy
 menhinick <- function(x) {
                           sum(x>0)/sqrt(sum(x))
@@ -53,15 +101,618 @@ indices = ddply(butt,~No.,function(x) {
 })
 
 butt = butt %>% left_join(indices)
+
+butt.sum = butt %>%
+  group_by(Year) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Total, na.rm=T),
+            SE = sd(Total, na.rm=T)/sqrt(n))
+butt.sum_Z = butt %>%
+  group_by(Year, Zone) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Total, na.rm=T),
+            SE = sd(Total, na.rm=T)/sqrt(n))
+butt.sum_ZS = butt %>%
+  group_by(Year,Site, Zone) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Total, na.rm=T),
+            SE = sd(Total, na.rm=T)/sqrt(n))
+butt.sum_S = butt %>%
+  group_by(Year,Site) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Total, na.rm=T),
+            SE = sd(Total, na.rm=T)/sqrt(n))
+
+
+index.long = butt %>% 
+  dplyr::select(c(1:4,32:38)) %>%
+  tidyr::gather(key = "Index", value = "Number", -c(1:4))
+index.long.sum = index.long %>% 
+  group_by(Year, Zone, Index) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number, na.rm=T),
+            SE = sd(Number, na.rm=T)/sqrt(n))
+index.long.sum2 = index.long %>% 
+  group_by(Year, Index) %>%
+  dplyr::summarise(Zone = "Total",
+            n = dplyr::n(),
+            Mean = mean(Number, na.rm=T),
+            SE = sd(Number, na.rm = T)/sqrt(n))
+index.long.sum = bind_rows(index.long.sum, index.long.sum2)
+
+diet.long = butt %>% 
+  dplyr::select(c(1:4, 28:30,32)) %>%
+  tidyr::gather(key = "Diet", value = "Number", -c(1:4))
+
+diet.long.sum = diet.long %>% 
+  group_by(Year, Zone, Diet) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n))
+diet.long.sum2 = diet.long %>% 
+  group_by(Year, Diet) %>%
+  dplyr::summarise(zone = "Total",
+            n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n))
+
+diet.long.sum = bind_rows(diet.long.sum, diet.long.sum2)
+
+
+species.long = butt %>% 
+  dplyr::select(c(1:27,32)) %>%
+  tidyr::gather(key = "Species", value = "Number", -c(1:4))
+
+species.long.sum = species.long %>% 
+  group_by(Year, Zone, Species) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n))
+species.long.sum2 = species.long %>% 
+  group_by(Year, Species) %>%
+  dplyr::summarise(zone = "Total",
+            n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n))
+species.long.sum = bind_rows(species.long.sum, species.long.sum2) %>% arrange(Year, -Mean)
+top8spec = species.long %>% group_by(Species) %>% 
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n)) %>%
+  top_n(8,Mean) %>% pull(Species)
+bottom8spec = species.long %>% group_by(Species) %>% 
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n())) %>%
+  top_n(8,-Mean) %>% pull(Species)
+middle8spec = unique(species.long$Species)[!unique(species.long$Species) %in% c(top8spec, bottom8spec)]
+
 ```
-```{r Plots}
+
+```{r Butterfly Summaries Diet}
+
+```
+
+
+# Mean Buterfly Fish Abundance vs Coral Cover
+
+```{r}
+plot.sum = left_join(butt.sum, cor.sum, by = c("Year"))
+plot.sum_Z = left_join(butt.sum_Z, cor.sum_Z, by = c("Year", "Zone"))
+plot.sum_S = left_join(butt.sum_S, cor.sum_S, by = c("Year", "Site"))
+plot.sum_ZS = left_join(butt.sum_ZS, cor.sum_ZS, by = c("Year", "Site", "Zone"))
+
+p_CoralButt = ggplot(plot.sum, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
+  coord_cartesian(ylim = c(0,20)) +
+  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Fish"), shape=21, size=0.8) + 
+  geom_smooth(aes(y=MeanHC/5, fill="Coral Cover"),colour="black") +
+  geom_pointrange(aes(y=MeanHC/5,ymin = MeanHC/5-SEHC/5, ymax=MeanHC/5+SEHC/5, fill="Coral Cover"), 
+                  shape=21, size=0.8) +
+  theme_bw(base_size = 12) +
+  scale_fill_manual(values=c("coral", "blue")) +
+  scale_y_continuous("Mean Abundance per Transect (+/- SE)", 
+                     sec.axis = sec_axis(~ .*5, name = "Mean % Coral Cover (+/- SE)")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom", legend.title = element_blank())
+
+p_Z = ggplot(plot.sum_Z, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
+  coord_cartesian(ylim = c(0,20)) +
+  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Fish"), shape=21, size=0.8) + 
+  geom_smooth(aes(y=MeanHC/5, fill="Coral Cover"),colour="black") +
+  geom_pointrange(aes(y=MeanHC/5,ymin = MeanHC/5-SEHC/5, ymax=MeanHC/5+SEHC/5, fill="Coral Cover"), 
+                  shape=21, size=0.8) +
+  facet_wrap(~Zone) + theme_bw(base_size = 14) +
+  scale_fill_manual(values=c("coral", "blue")) +
+  scale_y_continuous("Mean Abundance per Transect (+/- SE)", 
+                     sec.axis = sec_axis(~ .*5, name = "Mean % Coral Cover (+/- SE)")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom", legend.title = element_blank())
+
+p_S = ggplot(plot.sum_S, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
+  coord_cartesian(ylim = c(0,20))+
+  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Fish"), shape=21, size=0.8) + 
+  geom_smooth(aes(y=MeanHC/5, fill="Coral Cover"),colour="black") +
+  geom_pointrange(aes(y=MeanHC/5,ymin = MeanHC/5-SEHC/5, ymax=MeanHC/5+SEHC/5, fill="Coral Cover"), 
+                  shape=21, size=0.8) +
+  facet_wrap(~Site) + theme_bw(base_size = 14) +
+  scale_fill_manual(values=c("coral", "blue")) +
+  scale_y_continuous("Mean Abundance per Transect (+/- SE)", 
+                     sec.axis = sec_axis(~ .*5, name = "Mean % Coral Cover (+/- SE)")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom", legend.title = element_blank())
+
+p_ZS = ggplot(plot.sum_ZS, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
+  coord_cartesian(ylim = c(0,30))+
+  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Fish"), shape=21, size=0.8) + 
+  geom_smooth(aes(y=MeanHC/(10/3), fill="Coral Cover"),colour="black") +
+  geom_pointrange(aes(y=MeanHC/(10/3),ymin = MeanHC/(10/3)-SEHC/(10/3),
+                      ymax=MeanHC/(10/3)+SEHC/(10/3), fill="Coral Cover"), 
+                  shape=21, size=0.8) +
+  facet_grid(Site~Zone) + theme_bw(base_size = 18) +
+  scale_fill_manual(values=c("coral", "blue")) +
+  scale_y_continuous("Mean Abundance per Transect (+/- SE)", 
+                     sec.axis = sec_axis(~ .*(10/3), name = "Mean % Coral Cover (+/- SE)")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom", legend.title = element_blank())
+ggsave(filename = "HC_BF.png", plot = p_CoralButt, device = "png", width = 6, height=6, dpi = 300)
+ggsave(filename = "HC_BF_Zone.png", plot = p_Z, device = "png", width = 8, height=8, dpi = 300)
+ggsave(filename = "HC_BF_Site.png", plot = p_S, device = "png", width = 8, height=8, dpi = 300)
+ggsave(filename = "HC_BF_ZoneSite.png", plot = p_ZS, device = "png", width = 10, height=12, dpi = 300)  
+```
+
+
+```{r Alpha Diversity Plots, echo=F, warning=FALSE, results='hide', message=FALSE}
 p1 = ggplot(butt, aes(x = Year, y= Total)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
   theme_bw(base_size = 14)
 p2 = ggplot(butt, aes(x = Year, y= SIMPSON)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
   theme_bw(base_size = 14)
 p3 = ggplot(butt, aes(x = Year, y= PILOU.EVEN)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
   theme_bw(base_size = 14)
-p4 = ggplot(butt, aes(x = as.factor(Year), y= RICHNESS)) + geom_point() + geom_smooth() + facet_wrap(~zone)+ geom_boxplot()
+p4 = ggplot(butt, aes(x = as.factor(Year), y= RICHNESS)) + 
+  # geom_point() + 
+  geom_smooth() + facet_wrap(~zone)+ geom_boxplot()
   theme_bw(base_size = 14)
+  
+p5 = ggplot(index.long.sum %>%
+              dplyr::filter(Index %in% c("PILOU.EVEN", "RICHNESS.MAR", 
+                                         "SHANNON", "Total")), 
+            aes(x = Year, y= Mean, fill=Index)) + 
+  geom_smooth(colour="black") +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  facet_grid(Index~zone, scales = "free_y") + 
+  theme_bw(base_size = 14) +
+  ylab("Mean Response per Transect (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom")
+
+
+p6 = ggplot(diet.long, aes(x = as.factor(Year), y= Number, fill=Diet)) + 
+  # geom_point() +
+  geom_smooth() + 
+  facet_grid(Diet~zone, scales = "free_y") + 
+  geom_boxplot() +
+  theme_bw(base_size = 14)  
+
+p7 = ggplot(diet.long.sum, aes(x = Year, y= Mean, fill=Diet)) + 
+  geom_smooth(colour="black") +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  facet_grid(Diet~zone, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() + 
+  theme_bw(base_size = 14) +
+  ylab("Mean Abundance per Transect (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom")
+
+p8 = ggplot(species.long.sum %>% filter(Species %in% top8spec), 
+            aes(x = Year, y= Mean, fill=Species)) + 
+  geom_smooth(colour="black") +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  facet_grid(Species~zone, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() + 
+  ggtitle("Top Species by Abundance (1:7)") + 
+  theme_bw(base_size = 14) +
+  ylab("Mean Abundance per Transect (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom")
+
+p9 = ggplot(species.long.sum %>% filter(Species %in% c(middle8spec, "Total")), 
+            aes(x = Year, y= Mean, fill=Species)) + 
+  geom_smooth(colour="black") +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  facet_grid(Species~Zone, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() + 
+  ggtitle("Top Species by Abundance (8:15)") + 
+  theme_bw(base_size = 14) +
+  ylab("Mean Abundance per Transect (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom")
+p10 = ggplot(species.long.sum %>% filter(Species %in% c(bottom8spec, "Total")), 
+            aes(x = Year, y= Mean, fill=Species)) + 
+  geom_smooth(colour="black") +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  facet_grid(Species~zone, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() + 
+  ggtitle("Top Species by Abundance (16:23)") + 
+  theme_bw(base_size = 14) +
+  ylab("Mean Abundance per Transect (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
+        legend.position = "bottom")
+ggsave(filename = "top1_7.png", plot = p8, device = "png", width = 8, height=12, dpi = 300)
+ggsave(filename = "top8_15.png", plot = p9, device = "png", width = 8, height=12, dpi = 300)
+ggsave(filename = "top16_23.png", plot = p10, device = "png", width = 8, height=12, dpi = 300)
+
+
 ```
+
+## Diversity and Richness Indicies by Habitat
+
+First job is to calcualte, richness (RICHNESS.MAR), diversity (SHANNON) evenness (PILOU EVEN), and total abundance with respect to different habitats.
+
+```{r, out.width="100%"}
+p5
+```
+
+## Mean Abundance by Habitat and Diet.
+
+Now we'll look at how mean abundance changes with repect to habitat for each of the feeding groups. THis same plot could be easily reporduced for any of the other indicies
+
+```{r, out.width="100%"}
+p7
+```
+
+
+# 2. Fish Community Analysis
+
+* THis section needs quite a bit of work as there aren't many clear patterns I can make out. It looks like the crest and base communities separate out quite nicely and it looks as the slope and base habitats have changed in 2019-20. I'm looking inot to how best analyse community data as a time series, to quantify when the community has shifted significantly. It might be a matter of comparing years where coral cover was low vs high. 
+
+* I would also like to look produce similar figures but aggregated up for the feeding groups.
+
+```{r eval=FALSE, echo=FALSE}
+require(vegan)
+require(ade4)
+require(PCNM)
+require(packfor)
+require(AEM)
+butt.samp = butt[1:4]
+butt.faun = butt[5:27]
+curr.site <- "LH"
+sampling.LH <- butt.samp[butt.samp$site == curr.site, ]
+# sediment.40 <- sediment[sampling$STATION == curr.site, ]
+# waterquality.40 <- waterquality[sampling$STATION == curr.site, ]
+fauna.LH <- butt.faun[butt.samp$site == curr.site, ]
+fauna.LH <- fauna.LH[ , colSums(fauna.LH)!=0] # (26 sampling units x 36 taxa)
+# Quick analysis: identify the temporal structure of the sampling design
+dates.LH <- unique(sampling.LH$Year)
+plot(dates.LH, rep(1,11), yaxt="n", ylab="")
+# 3.2. TEMPORAL EIGENFUNCTION ANALYSIS OF COMMUNITY DATA FROM SITE 40
+# Hellinger transformation of the faunal data prior to analysis by RDA
+# Transformation: square root of the relative abundances by rows
+# See reference to Legendre & Gallagher (2001) in ?decostand
+fauna.hel.LH <- decostand(fauna.LH, method="hellinger")
+# Is there a linear temporal trend in the response data?
+fauna.trend <- rda(fauna.hel.LH, sampling.LH$Year)
+anova(fauna.trend, step=10000, perm.max=10000) # See note1
+RsquareAdj(fauna.trend)
+# Examine the R-square and the p-value to decide if there is a significant temporal trend.
+# Detrend the response data (i.e. compute residuals) only if the trend is [highly] significant.
+# The MEM and AEM methods are equally suitable to analyze the temporal structure of the data.
+correlog.butt <- mantel.correlog(dist(fauna.hel.LH), XY=sampling.LH$Year, n.class=11)
+plot(correlog.butt)
+
+
+# Generate a "time.seq" variable containing the integers 1 to 26
+time.seq = as.data.frame(1:26) # Generate a "time.seq" variable containing integers 1 to 26
+colnames(time.seq) = "time.seq"
+part.res <- mvpart(data.matrix(fauna.hel.40) ~ time.seq, data=time.seq, xv="pick", xvmult=100)
+# Click on the red dot of the graph to obtain the tree.
+# Two groups represent the solution with the smallest CVRE (“best” in that sense).
+# Find the observations in which group:
+part.res$where
+```
+
+
+```{r NMDS Community Comp, echo=F, cache=TRUE, warning=FALSE, results='hide', message=FALSE}
+#### NMDS COmpositoin Plot ####
+
+library(vegan)
+library(MASS)
+
+butt.samp = butt[1:4]
+butt.faun = butt[5:27]
+
+# Dissimilarity Matrix
+butt.faun2 = butt.faun[ rowSums(butt.faun)!=0,]
+butt.samp2 = butt.samp[ rowSums(butt.faun)!=0,]
+butt.faun2 = butt.faun2[!butt.samp2$No.==915,]
+butt.samp2 = butt.samp2[!butt.samp2$No.==915,]
+CORAL.dis <- vegdist(butt.faun2, "bray")
+# NMDS
+CORAL.nmds <- metaMDS(butt.faun2)
+
+# Analysis of Similarity - ANOSIM
+# CORAL.ano <- anosim(CORAL.dis, butt.samp2$zone)
+# # Print pVal
+# CORAL.ano$signif
+# CORAL.ano$statistic
+
+
+# Get Scores to build in GGplot
+data.scores <- as.data.frame(scores(CORAL.nmds))  #Using the scores function from vegan to extract the site scores and convert to a data.frame
+data.scores$site <- rownames(data.scores)  # create a column of site names, from the rownames of data.scores
+data.scores$grp <- butt.samp2$zone
+data.scores$location <- butt.samp2$site
+data.scores$yr <- butt.samp2$Year
+
+#  add the grp variable created earlier
+head(data.scores)  #look at the data
+
+species.scores <- as.data.frame(scores(CORAL.nmds, "species"))  #Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores$species <- rownames(species.scores)  # create a column of species, from the rownames of species.scores
+head(species.scores)
+
+grps = levels(data.scores$grp)
+locs = levels(data.scores$location)
+yrs = unique(data.scores$yr)
+
+hull.data = data.scores[-(1:nrow(data.scores)),]
+for (g in 1:length(grps)){
+  # for(l in 1:length(locs)){
+    for(y in 1:length(yrs)){
+      grp = data.scores[data.scores$grp == grps[g] &
+                        # data.scores$location == locs[l] &
+                        data.scores$yr == yrs[y], ][chull(data.scores[data.scores$grp == grps[g] &
+                        # data.scores$location == locs[l] &
+                        data.scores$yr == yrs[y], c("NMDS1", "NMDS2")]), ]
+      hull.data = rbind(hull.data, grp)
+      
+    }
+  }
+# }
+# Assign groups to Reef to plot convex hull
+grp.a <- data.scores[data.scores$grp == "Base", ][chull(data.scores[data.scores$grp == 
+                                                                          "Base", c("NMDS1", "NMDS2")]), ]  # hull values for grp A
+grp.b <- data.scores[data.scores$grp == "Crest", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Crest", c("NMDS1", "NMDS2")]), ]  
+grp.c <- data.scores[data.scores$grp == "Flat", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Flat", c("NMDS1", "NMDS2")]), ]  
+grp.d <- data.scores[data.scores$grp == "Slope", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Slope", c("NMDS1", "NMDS2")]), ]  
+# hull values for grp B
+# hull.data <- rbind(grp.a, grp.b, grp.c, grp.d)  #combine grp.a and grp.b
+hull.data = hull.data %>% filter(!site %in% c(915, 759,760))
+data.scores = data.scores %>% filter(!site %in% c(915, 759,760))
+# species.scores = species.scores %>% filter(!site %in% 915)
+```
+
+```{r}
+pHull =ggplot() + 
+  geom_polygon(data=hull.data,aes(x=NMDS1,y=NMDS2,fill=grp,group=grp),alpha=0.30) + # add the convex hulls
+  geom_point(data=data.scores,aes(x=NMDS1,y=NMDS2,shape=grp,colour=grp),size=3) + # add the point markers
+  # geom_label(data=species.scores,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+  scale_colour_manual(labels = levels(butt.samp2$zone), values=c( "seagreen", "orange", "lightblue", "purple")) +
+  scale_fill_manual(labels = levels(butt.samp2$zone),values=c( "seagreen", "orange", "lightblue", "purple")) +
+  scale_shape_manual(labels = levels(butt.samp2$zone), values = 16:19) +
+  coord_equal() +
+  guides(fill=guide_legend(title="Habitat", reverse =T)) +
+  guides(color=guide_legend(title="Habitat", reverse =T)) +
+  guides(shape=guide_legend(title="Habitat", reverse =T)) +
+  # geom_rect(aes(ymin = 0.75, ymax = 0.95, xmin = 0.55, xmax = 0.99), fill= "white", color = "black") +
+  # annotate(geom="text", x=0.99, y=0.9, label="Stress = 0.099", hjust=1) +
+  # annotate(geom="text", x=0.99, y=0.83, label="R = 0.863", hjust=1) +
+  # annotate(geom="text", x=0.99, y=0.76, label="P = 0.001", hjust=1) +
+  theme_bw(base_size=14) +
+  # ggtitle("(b)")+
+  theme(axis.text.x = element_blank(),  # remove x-axis text
+        axis.text.y = element_blank(), # remove y-axis text
+        axis.ticks = element_blank(),  # remove axis ticks
+        legend.position = "top",
+        # axis.title.x = element_text(size=18), # remove x-axis labels
+        # axis.title.y = element_text(size=18), # remove y-axis labels
+        panel.background = element_blank(), 
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank()) +
+  facet_grid(yr~location)
+
+pHull2 =ggplot() + 
+  geom_polygon(data=hull.data,aes(x=NMDS1,y=NMDS2,fill=grp,group=grp),alpha=0.30) + # add the convex hulls
+  geom_point(data=data.scores,aes(x=NMDS1,y=NMDS2,shape=grp,colour=grp),size=4) + # add the point markers
+  # geom_label(data=species.scores,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+  scale_colour_manual(labels = levels(butt.samp2$zone), values=c( "seagreen", "orange", "lightblue", "purple")) +
+  scale_fill_manual(labels = levels(butt.samp2$zone),values=c( "seagreen", "orange", "lightblue", "purple")) +
+  scale_shape_manual(labels = levels(butt.samp2$zone), values = 16:19) +
+  coord_equal() +
+  guides(fill=guide_legend(title="Habitat", reverse =T)) +
+  guides(color=guide_legend(title="Habitat", reverse =T)) +
+  guides(shape=guide_legend(title="Habitat", reverse =T)) +
+  # geom_rect(aes(ymin = 0.75, ymax = 0.95, xmin = 0.55, xmax = 0.99), fill= "white", color = "black") +
+  # annotate(geom="text", x=0.99, y=0.9, label="Stress = 0.099", hjust=1) +
+  # annotate(geom="text", x=0.99, y=0.83, label="R = 0.863", hjust=1) +
+  # annotate(geom="text", x=0.99, y=0.76, label="P = 0.001", hjust=1) +
+  theme_bw(base_size=14) +
+  # ggtitle("(b)")+
+  theme(axis.text.x = element_blank(),  # remove x-axis text
+        axis.text.y = element_blank(), # remove y-axis text
+        axis.ticks = element_blank(),  # remove axis ticks
+        legend.position = "top",
+        # axis.title.x = element_text(size=18), # remove x-axis labels
+        # axis.title.y = element_text(size=18), # remove y-axis labels
+        panel.background = element_blank(), 
+        panel.grid.major = element_blank(),  #remove major-grid labels
+        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        plot.background = element_blank()) +
+  facet_wrap(~yr, nrow = 2)
+
+# ggsave(plot = pHull, file="Community.png",dpi=300, height=12, width=6)
+# ggsave(plot = pHull2, file="Community2.png",dpi=300, height=10, width=10)
+# butt.simp = simper(butt.faun2, group = butt.samp2$zone)
+# summary(butt.simp)
+```
+
+```{r, out.width="100%"}
+pHull2
+```
+
+
+# 3. Habitat Generalists vs Specialists
+
+Here we use Similarity Percentages (SIMPER) to rank the contribution of each species to the differences found between groups. The two factors I have investigated are habitat and site, but we could also quie easily group years of high coral/low coral cover together to see which species contribute the most to differences between year groups. SIMPER doesn't indicate whether or not these species are abundant or rare, or specialists vs generalists, but it says which species we could use to tell different group apart.
+
+THe second approach is to use indicative species analysis to identiy species associated with certain habiats or sites. Species indicative of only 1 /group would be more specialist while species indicative of multiple sites/habitats would be more generalist. 
+
+THere is more to be done on this but this gives a pretty good indication.
+
+
+```{r SImilarity Percentages, cache=T}
+butt.simp.zone = simper(butt.faun2, group = butt.samp2$zone)
+butt.simp.site = simper(butt.faun2, group = butt.samp2$site)
+butt.simp.year = simper(butt.faun2, group = butt.samp2$Year)
+# summary(butt.simp.year)
+```
+
+## Similarity Percentages (SIMPER) by Habitat
+
+```{r}
+summary(butt.simp.zone)
+```
+
+## Similarity Percentages (SIMPER) by Site
+
+```{r}
+summary(butt.simp.site)
+```
+
+
+
+```{r Indicative Species, cache=F}
+# install.packages("indicspecies")
+indval = indicspecies::multipatt(butt.faun2, butt.samp2$zone,
+  control = how(nperm=999))
+indval.site = indicspecies::multipatt(butt.faun2, butt.samp2$site,
+  control = how(nperm=999))
+# indval.year = indicspecies::multipatt(butt.faun2, butt.samp2$Year,
+#   control = how(nperm=999))
+```
+
+## Indicative Species by Habitat
+
+```{r}
+summary(indval)
+```
+
+
+## Indicative Species by Site
+
+```{r}
+summary(indval.site)
+```
+
+
+# Coral Cover Model
+
+```{r Coral Cover GLM}
+hist(plot.sum_ZS$Mean)
+mod1 = lm(Mean~MeanHC + Zone + Site, data=plot.sum_ZS)
+summary(mod1)
+car::Anova(mod1)
+lmerTest::rand(mod1)
+library(ggeffects)
+pred1 = ggpredict(mod1, ~MeanHC) 
+pred2 = ggpredict(mod1, ~Site) 
+pred3 = ggpredict(mod1, ~Zone)
+
+pTot1=ggplot(pred1, aes(y = predicted, x = x)) + geom_point(data = plot.sum_ZS, aes(y = Mean, x=MeanHC),
+    col = "grey") + 
+    geom_line(colour = "coral", size=1) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, fill = "coral", alpha = 0.3 ) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_classic() + theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+
+pTot2 = ggplot(pred2, aes(y = predicted, x = x)) + geom_point(data = plot.sum_ZS, aes(y = Mean, x=Site),
+    col = "grey") + geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size=1) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_discrete("Site") + theme_classic() + theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+pTot3 = ggplot(pred3, aes(y = predicted, x = x)) + geom_point(data = plot.sum_ZS, aes(y = Mean, x=Zone),
+    col = "grey") + geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size=1) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_discrete("Zone") + theme_classic() + theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+
+```
+
+```{r Coral Cover GLM Obligate Coral}
+diet.sum = diet.long %>% 
+  group_by(Year, Zone, Site, Diet) %>%
+  dplyr::summarise(n = dplyr::n(),
+            Mean = mean(Number),
+            SE = sd(Number)/sqrt(n))
+diet.sum.mod = left_join(diet.sum, cor.sum_ZS, by = c('Year', "Site", "Zone"))
+diet.sum.modOC = diet.sum.mod %>% filter(Diet %in% "Obligate.corallivores")
+diet.sum.modNC = diet.sum.mod %>% filter(Diet %in% "Non.corallivores")
+diet.sum.modFC = diet.sum.mod %>% filter(Diet %in% "Facultative.corallivores")
+diet.sum.modAll = diet.sum.mod %>% filter(!Diet %in% "Total")
+hist(plot.sum_ZS$Mean)
+modOC = lm(Mean~MeanHC +Zone + Site, data=diet.sum.modOC)
+modAll1 = lm(Mean~MeanHC*Diet +Zone + Site, data=diet.sum.modAll)
+modAll2 = lm(Mean~MeanHC*Diet +Diet*Zone + Diet*Site, data=diet.sum.modAll)
+AIC(modAll1, modAll2)
+summary(modOC)
+car::Anova(modOC)
+summary(modAll)
+car::Anova(modAll2)
+lmerTest::rand(modOC)
+library(ggeffects)
+predAll = ggpredict(modAll2, ~MeanHC*Diet)
+predAllS = ggpredict(modAll2, ~MeanHC*Diet+Site+Zone)
+predAll2 = ggpredict(modAll2, ~Site*Diet)
+predAll3 = ggpredict(modAll2, ~Zone*Diet)
+
+colnames(predAll)[6] = "Diet"
+colnames(predAllS)[6:8] = c("Diet", "Site", "Zone")
+colnames(predAll2)[6] = c("Diet")
+colnames(predAll3)[6] = c("Diet")
+
+pMod1 = ggplot(predAll, aes(y = predicted, x = x, colour = Diet, fill=Diet)) + 
+    geom_point(data = diet.sum.modAll, aes(y = Mean, x=MeanHC), alpha=0.3) + 
+    geom_line( size=1) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, alpha = 0.3, color = NA ) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 14) +
+    theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), legend.position = "bottom", 
+    axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+pMod2 = ggplot(predAll2, aes(y = predicted, x = x, colour = Diet, fill=Diet)) + 
+    # geom_point(data = diet.sum.modAll, aes(y = Mean, x=Site, alpha=0.3)) + 
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size=1, position = position_dodge(width=0.5)) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_discrete("Site") + theme_bw(base_size = 14) + theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), legend.position = "bottom",axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+pMod3 = ggplot(predAll3, aes(y = predicted, x = x, colour = Diet, fill=Diet)) + 
+    # geom_point(data = diet.sum.modAll, aes(y = Mean, x=Site, alpha=0.3)) + 
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size=1, position = position_dodge(width=0.5)) +
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_x_discrete("Site") + theme_bw(base_size = 14) + theme(axis.title.y = element_text(vjust = 1,
+    size = rel(1.25)), legend.position = "bottom",axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+
+ggsave(filename = "modPE_Coral.png", plot = pMod1, device = "png", width = 7, height=6, dpi = 300)
+ggsave(filename = "modPE_Site.png", plot = pMod2, device = "png", width = 7, height=6, dpi = 300)
+ggsave(filename = "modPE_Zone.png", plot = pMod3, device = "png", width = 7, height=6, dpi = 300)
+  
+  
+
+```
+
+```
+
 

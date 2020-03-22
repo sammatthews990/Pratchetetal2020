@@ -1,0 +1,818 @@
+---
+title: "FMP RHIS Program"
+output: html_document
+---
+
+```{r setup, cache=F, echo=F, warning=FALSE, results='hide', message=FALSE}
+# install.packages("lme4")
+library(lme4)
+library(leaflet)
+library(zoo)
+# library(sp)
+library(rgdal)
+# library(plotly)
+library(DT)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(sjPlot)
+```
+
+```{r Cummean Code}
+#' Cumulative means, variances, standard deviations
+#' 
+#' \code{cummean}, \code{cumvar} and \code{cumsd} compute
+#' cumulative mean, variance and standard deviation. 
+#' \code{welford} uses Welford on-line algorithm for
+#' computing cumulative mean and variance.
+#' 
+#' @param x numeric vector
+#' 
+#' @references
+#' Knuth, D.E. (1998). The Art of Computer Programming, Vol. 2:
+#' Seminumerical Algorithms, 3rd edn., p. 232. Boston: Addison-Wesley.
+#' 
+#' @references
+#' Welford, B.P. (1962). Note on a method for calculating corrected sums
+#' of squares and products. Technometrics, 4(3):419–420.
+#' 
+#' @references
+#' Chan, T.F., Golub, G.H., & LeVeque, R.J. (1983).
+#' Algorithms for Computing the Sample Variance: Analysis and Recommendations.
+#' The American Statistician, 37, 242-247. 
+#' 
+#' @references
+#' Ling, R.F. (1974). Comparison of Several Algorithms for Computing Sample
+#' Means and Variances. Journal of the American Statistical Association,
+#' 69(348), 859-866.
+#' 
+#' @name cumsd
+#' @export
+
+cumsd <- function(x) sqrt(cumvar(x))
+
+
+#' Cumulative sum, product and mean
+#' 
+#' Cumulative sum, product and mean functions that ignore
+#' missing values (if \code{na.rm = TRUE}).
+#' 
+#' @param x       numeric vector
+#' @param missing if \code{FALSE} missing values are marked
+#'                as missing in the output; otherwise (default)
+#'                they are replaced with the previous value
+#'                in the sequence
+#' 
+#' @export
+
+cumSum <- function(x, missing = FALSE) {
+  nas <- is.na(x)
+  x[nas] <- 0
+  out <- cumsum(x)
+  if (missing)
+    out[nas] <- NA
+  out
+}
+
+
+#' @rdname cumSum
+#' @export
+
+cumProd <- function(x, missing = FALSE) {
+  nas <- is.na(x)
+  x[nas] <- 1
+  out <- cumprod(x)
+  if (missing)
+    out[nas] <- NA
+  out
+}
+
+
+#' @rdname cumSum
+#' @export
+
+cumMean <- function(x, missing = FALSE) {
+  nas <- is.na(x)
+  x[nas] <- 0
+  out <- cumsum(x)/cumsum(as.numeric(!nas))
+  if (missing)
+    out[nas] <- NA
+  out
+}
+
+
+```
+
+
+```{r Load and Process Data, cache = T, echo=F, results='hide'}
+#### Load Shapefiles ----
+shp.reefs = rgdal::readOGR("Shapefiles/Indicative_Reef_boundary/Indicative_Reef_boundary.shp", verbose = F)
+shp.zones = rgdal::readOGR("Shapefiles/Great_Barrier_Reef_Marine_Park_Zoning/Great_Barrier_Reef_Marine_Park_Zoning.shp", verbose = F)
+shp.mgmt = rgdal::readOGR("Shapefiles/Management_Areas_of_the_GBRMP__Poly_/Management_Areas_of_the_GBRMP__Poly_.shp", verbose = F)
+
+colnames(shp.reefs@data)[13] = "ReefName"
+colnames(shp.reefs@data)[3] = "ReefID"
+shp.reefs@data = shp.reefs@data[-c(1:2,4:12,14, 18:20)]
+shp.reefs = shp.reefs[order(shp.reefs@data$ReefName),]
+
+#### Load Observation Data ----
+
+# RHIS
+dat.RHIS = read.csv("Data/ObsData_RHIS.csv", header =T, na.strings = "")
+dat.FMP = read.csv("Data/FMP_RHISProgram.csv", header =T, na.strings = "")
+# dat.CULL = read.csv("Data/ObsData_Culling.csv", header =T, na.strings = "")
+# dat.MANT = read.csv("Data/ObsData_MantaTow.csv", header =T, na.strings = "")
+dat.REEF = read.csv("Data/SpatialData_Reef.csv", header = T, na.strings = c("", "NA"))
+
+#### Ensure consistent column names ----
+
+# combines all data files into a list
+df.list = mget(ls(pattern="dat")) 
+
+# replace "." and "X"'s in column names
+for (i in 1:length(df.list)) {
+  colnames(df.list[[i]]) = gsub("X", "", colnames(df.list[[i]]), fixed = T)
+  colnames(df.list[[i]]) = gsub(".", "", colnames(df.list[[i]]), fixed = T)
+}
+
+# unlist the dataframes and overwtite those n the global environment
+list2env(df.list, .GlobalEnv) 
+
+report_dates = as.Date(c("2018-11-01", "2019-09-30"))
+figure_start_date = as.Date("2018-11-01")
+
+# Consistent Date Format
+
+dat.RHIS$ObservationDate = as.Date(dat.RHIS$ObservationDate, "%d/%m/%Y")
+dat.RHIS$Quarter <- as.yearqtr(dat.RHIS$ObservationDate, format = "%d/%m/%Y")
+dat.FMP$ObservationDate = as.Date(dat.FMP$ObservationDate, "%d/%m/%Y")
+dat.FMP$Quarter <- as.yearqtr(dat.FMP$ObservationDate, format = "%d/%m/%Y")
+
+```
+
+```{r Summaries, cache=T, results='hide', warning=FALSE}
+# check how NA's are brought in --> blanks
+sum.FMP = dat.FMP %>%
+  group_by(ReefName, ReefID, Quarter) %>%
+  summarise(n = n(),
+            MeanHC = mean(BenthosLiveHardCoral, na.rm=T),
+            seHC = sd(BenthosLiveSoftCoral, na.rm=T)/sqrt(n()),
+            sdHC = sd(BenthosLiveHardCoral, na.rm = T),
+            cvHC = sdHC/MeanHC,
+            MeanCOTS = mean(COTSSeenAdult, na.rm=T),
+            seCOTS = sd(COTSSeenAdult, na.rm = T)/sqrt(n())) %>%
+  mutate(CoralCat = cut(MeanHC, breaks = c(0,10,30,50,75,100)),
+         MeanHC2 = MeanHC^2) %>%
+  left_join(dplyr::select(dat.REEF, ReefName, Area_HA), by="ReefName") 
+sum.FMP$Size = cut_number(sum.FMP$Area_HA, 3, labels = c("Small", "Medium", "Large"))
+  
+ggplot(sum.FMP, aes(x = MeanHC, y=cvHC, color = CoralCat)) + geom_point() +
+  geom_hline(aes(yintercept=0.3), linetype="dashed", size=1, alpha=0.5)
+
+ggplot(sum.FMP, aes(x = MeanHC, y=sdHC, color = CoralCat)) + geom_point() +
+  geom_hline(aes(yintercept=0.3), linetype="dashed", size=1, alpha=0.5)
+
+dat.CV = data.frame(meanHC = c(37, 33, 22, 32,15,11), cv= c(25,39,19,24,17,12))
+ggplot(dat.CV, aes(x = meanHC, y=cv)) + geom_point() + geom_smooth(method = "lm")
+
+sum.FMP$wt = ifelse(sum.FMP$MeanHC <=50, 1/(sum.FMP$MeanHC^2), 1/((100-sum.FMP$MeanHC)^2))
+
+quad.mod = lm(sdHC ~ MeanHC + MeanHC2, data = na.omit(sum.FMP))
+summary(quad.mod)
+
+sum.FMP$wt2 = ifelse(sum.FMP$MeanHC <=50, 1/(sum.FMP$MeanHC^2), 1/((100-sum.FMP$MeanHC)^2))
+sum.FMP$wt = ifelse(sum.FMP$MeanHC <=50, 1/(sum.FMP$MeanHC), 1/((100-sum.FMP$MeanHC)))
+
+quad.mod2 = lm(sdHC ~ MeanHC + MeanHC2, weights = wt, data = na.omit(sum.FMP)%>% filter(n>=9))
+quad.mod3 = lm(sdHC ~ MeanHC + MeanHC2, weights = wt2, data = na.omit(sum.FMP)%>% filter(n>=9))
+
+summary(quad.mod2)
+AIC(quad.mod, quad.mod2, quad.mod3)
+plot(quad.mod)
+
+x=1:50 ; wt = 1/(x) ; wt = c(wt, rev(wt))
+x=1:50 ; wt2 = 1/(x^2) ; wt2 = c(wt2, rev(wt2))
+preds=predict(quad.mod2, newdata = list(MeanHC = 1:100, MeanHC2 = (1:100)^2), weights=wt, interval = "prediction")
+REEFS = dat.RHIS %>% distinct(ReefName) %>% pull() %>% as.character
+
+
+# Poisson GLM
+sum.FMP$sdHC.Int = as.integer(sum.FMP$sdHC)
+quad.mod4 = glm(sdHC.Int ~ MeanHC + MeanHC2, weights = wt, data = na.omit(sum.FMP), family = "poisson")
+quad.mod5 = glm(sdHC.Int ~ MeanHC + MeanHC2, weights = wt2, data = na.omit(sum.FMP), family = "poisson")
+quad.mod6 = glm(sdHC.Int ~ MeanHC + MeanHC2, data = na.omit(sum.FMP), family = "poisson")
+
+summary(quad.mod4)
+summary(quad.mod5)
+summary(quad.mod6)
+
+# Quasi Poisson GLM
+quad.mod7 = glm(sdHC.Int ~ MeanHC + MeanHC2, weights = wt, data = na.omit(sum.FMP), 
+                family=quasipoisson(link="log"))
+quad.mod8 = glm(sdHC.Int ~ MeanHC + MeanHC2, weights = wt2, data = na.omit(sum.FMP), 
+                family=quasipoisson(link="log"))
+summary(quad.mod7)
+summary(quad.mod8)
+
+AIC(quad.mod, quad.mod2, quad.mod3, quad.mod4, quad.mod5, quad.mod6, quad.mod7, quad.mod8)
+preds.QP=predict(quad.mod7, newdata = list(MeanHC = 1:100, MeanHC2 = (1:100)^2), weights=wt2, type='response', se=T)
+
+library(vcd)
+fit = goodfit(sum.FMP$sdHC.Int, type='poisson')
+summary(fit)
+rootogram(fit)
+fit = goodfit(sum.FMP$sdHC.Int, type='nbinom')
+summary(fit)
+rootogram(fit)
+
+# NegBinom GLM
+library(MASS)
+quad.mod9 = glm.nb(sdHC.Int ~ MeanHC + MeanHC2, weights = wt, data = na.omit(sum.FMP) %>% filter(n>=9))
+quad.mod10 = glm.nb(sdHC.Int ~ MeanHC + MeanHC2, weights = wt2, data = na.omit(sum.FMP)%>% filter(n>=9))
+summary(quad.mod9)
+preds.NB = predict(quad.mod9, newdata = list(MeanHC = 1:100, MeanHC2 = (1:100)^2), weights=wt, 
+                   type='response', se=T, interval="prediction")
+
+# Plot for Gaussian
+ggplot(sum.FMP) + geom_point(aes(x = MeanHC, y=sdHC, color = Size)) +
+  #ylim(c(0,50)) +
+  coord_cartesian(ylim = c(0,50)) +
+  # geom_hline(aes(yintercept=0.3), linetype="dashed", size=1, alpha=0.5) +
+  geom_ribbon(data=as.data.frame(preds), aes(x= 1:100, ymin=lwr, ymax=upr), alpha=0.2) + 
+  geom_line(data=as.data.frame(preds),aes(y=fit, x=1:100)) +
+  coord_cartesian(ylim = c(0,50)) 
+
+# Plot for QuasiPoisson
+ggplot(sum.FMP) + geom_point(aes(x = MeanHC, y=sdHC.Int, color = Size)) +
+  #ylim(c(0,50)) +
+  coord_cartesian(ylim = c(0,50)) +
+  # geom_hline(aes(yintercept=0.3), linetype="dashed", size=1, alpha=0.5) +
+  geom_ribbon(data=as.data.frame(preds.QP), aes(x= 1:100, ymin=fit - 5*se.fit, 
+                                                ymax=fit + 5*se.fit), alpha=0.2) + 
+  geom_line(data=as.data.frame(preds.QP),aes(y=fit, x=1:100)) +
+  coord_cartesian(ylim = c(0,50))
+
+# Plot for NegBinom
+ggplot(sum.FMP %>% filter(n>=9)) + geom_point(aes(x = MeanHC, y=sdHC.Int, color = Size)) +
+  #ylim(c(0,50)) +
+  coord_cartesian(ylim = c(0,50)) +
+  # geom_hline(aes(yintercept=0.3), linetype="dashed", size=1, alpha=0.5) +
+   geom_ribbon(data=as.data.frame(preds.NB), aes(x= 1:100, ymin=fit - 1*se.fit, 
+                                                ymax=fit + 1*se.fit), alpha=0.2) +
+  geom_line(data=as.data.frame(preds.NB),aes(y=fit, x=1:100)) +
+  coord_cartesian(ylim = c(0,50)) 
+  
+```
+
+
+
+
+# Find minimum Detectable change
+
+```{r Minimum detectable change}
+power.t = function(M1, diff, Level="fit") {
+
+ SDlevel = ifelse(Level=="lwr", 2, ifelse(Level=="upr", 3,ifelse(Level=="fit", 1, NA)))  
+ M1  = M1                      # Mean for sample 1
+ M2  = ifelse((M1+diff)<=0,1, (M1+diff))                       # Mean for sample 2
+ S1  =  preds[M1,SDlevel]                      # Std dev for sample 1
+ S2  =  preds[M2,SDlevel]                       # Std dev for sample 2
+
+ Cohen.d = (M1 - M2)/sqrt(((S1^2) + (S2^2))/2)  
+                                          
+ library(pwr)
+                                    
+ pwr.t =  pwr.t.test(
+        n = 1:100,                 # Observations in _each_ group
+        d = Cohen.d,            
+        sig.level = 0.05,          # Type I probability
+        power = NULL,              # 1 minus Type II probability
+        type = "two.sample",  
+        if(diff>0) {alternative = "less"} else
+          alternative = "greater"
+        )
+  return(data.frame(nPairs=1:100, SD = mean(S1,S2), meanHC=M1, deltaHC =diff, Pwer = pwr.t$power))
+}  
+
+pwr.t = power.t(1,1)[-(1:100),]
+HCs = c(10,30,50)
+Diffs = c(-40:40)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t = rbind(pwr.t, power.t(HCs[i],Diffs[j]))
+  }
+}
+
+pwr.t.upp = power.t(1,1, "upr")[-(1:100),]
+HCs = c(10,30,50)
+Diffs = c(-40:40)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t.upp = rbind(pwr.t.upp, power.t(HCs[i],Diffs[j], "upr"))
+  }
+}
+
+pwr.t.lwr = power.t(1,1, "lwr")[-(1:100),]
+HCs = c(10,30,50)
+Diffs = c(-40:40)
+for (i in 1:length(HCs)) {
+  for (j in 1:length(Diffs)){
+  pwr.t.lwr = rbind(pwr.t.lwr, power.t(HCs[i],Diffs[j], "lwr"))
+  }
+}
+
+pwr.t.pos = pwr.t %>% filter(deltaHC >0)
+pwr.t.neg = pwr.t %>% filter(deltaHC <0)
+pwr.t.pos$meanHC = factor(pwr.t.pos$meanHC)
+pwr.t.pos$deltaHC = factor(pwr.t.pos$deltaHC)
+pwr.t.neg$meanHC = factor(pwr.t.neg$meanHC)
+pwr.t.neg$deltaHC = fct_rev(factor(pwr.t.neg$deltaHC))
+
+p.PowerPos = ggplot(pwr.t.pos %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  labs(x= "Number of RHIS Surveys", y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover increase")
+p.PowerNeg = ggplot(pwr.t.neg %>% filter(meanHC %in% c("10", "30", "50")), aes(x=nPairs, y=Pwer, fill=deltaHC)) +
+  geom_hline(aes(yintercept=0.8), linetype="dashed") +
+  geom_vline(aes(xintercept=3), linetype="dashed") +
+  geom_point(aes(colour = deltaHC), alpha=0.5) +
+  geom_smooth(aes(colour = deltaHC)) + xlim(c(0,25)) +
+  theme_bw(base_size = 14) +
+  theme(axis.title.x = element_blank()) +
+  labs(y="Power", fill = "Change in \nCoral Cover", color = "Change in \nCoral Cover")+
+  facet_wrap(~meanHC, ncol = 3) + ggtitle("Power for detecting coral cover decline")
+
+# Minimum Detectable Difference
+MDDneg = pwr.t.neg %>% filter(Pwer > 0.8) %>% 
+  group_by(meanHC, nPairs) %>% 
+  summarise(MDC = max(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDDpos = pwr.t.pos %>% filter(Pwer > 0.8) %>% 
+  group_by(meanHC, nPairs) %>% 
+  summarise(MDC = min(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDDneg %>% full_join(MDDpos, by = c("meanHC", "nPairs"))
+
+
+# Minimum Detectable Difference
+MDD.pos.upr = pwr.t.upp %>% filter(Pwer > 0.8 & deltaHC > 0) %>% 
+  group_by(meanHC, nPairs) %>% 
+  summarise(MDC = min(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDD.neg.upr = pwr.t.upp %>% filter(Pwer > 0.8 & deltaHC < 0) %>% 
+  group_by(meanHC, nPairs) %>% 
+  summarise(MDC = max(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDD.pos.upr %>% full_join(MDD.neg.upr, by = c("meanHC", "nPairs"))
+
+# Minimum Detectable Difference
+MDD.pos.lwr = pwr.t.lwr %>% filter(Pwer > 0.8 & deltaHC > 0) %>% 
+  group_by(meanHC, nPairs, SD) %>% 
+  summarise(MDC = min(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDD.neg.lwr = pwr.t.lwr %>% filter(Pwer > 0.8 & deltaHC < 0) %>% 
+  group_by(meanHC, nPairs, SD) %>% 
+  summarise(MDC = max(as.numeric(as.character(deltaHC)))) %>%
+  filter(nPairs %in% c(5,10,15,20, 25,30))
+
+MDD.pos.lwr %>% full_join(MDD.neg.lwr, by = c("meanHC", "nPairs", "SD"))
+```
+
+```{r MDD - Lower}
+dat.TEST = dat.FMP %>% filter(ReefID %in% "18-100a") %>% left_join(sum.FMP, by='ReefID') %>% 
+  dplyr::select(-c(29:44)) %>%
+  dplyr::select(ReefName.x, ReefID, Longitude, Latitude, Habitat, Aspect, 16:18, 24, 49:56) %>%
+  mutate(CumMean = cumMean(BenthosLiveHardCoral),
+         CumSD = TTR::runSD(BenthosLiveHardCoral, n=1, cumulative=T),
+         CumCV = CumSD/CumMean)
+
+# Draw 1000 Random samples for 10% , 30%, 50% w/ upper and lower prediction bands to represent the "true" coral cover
+# These are assuming the 20-40% Coefficient of variation is incorporated by standard deviation of observations
+r.10.m = rnorm(100, 10, preds[10,1]); r.30.m = rnorm(100, 30, preds[30,1]); r.50.m = rnorm(100, 50, preds[50,1])
+r.10.m[r.10.m < 0] = 0; r.30.m[r.30.m < 0] = 0; r.50.m[r.50.m < 0] = 0
+
+# Draw 1-20 samples from each 100 times, these will represent the mean you get with each level of replication
+
+# 10%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,10,preds[10,2])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.01),
+            Max = quantile(mean, 0.99),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p10.lwr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + ylim(c(0,25))+
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkred") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20, 25), linetype = "dotted") +
+  geom_label(x=25,y=23,label = "10% Coral Cover", size=6) +
+  geom_label(x=5,y=0, vjust=0, label = "+3%, -2%") +
+  geom_label(x=10,y=0, vjust=0,label = "+2%, -2%") +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=15,y=0, vjust=0, label = "+2%, -1%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+2%, -1%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+1%, -1%") +
+  ggtitle ("Minimum Detectable Difference (MDD) for RHIS") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("")
+p10.lwr 
+
+# 30%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,30,preds[30,2])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p30.lwr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + ylim(c(0,70))+
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkorange") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=67,label = "30% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = "+11%, -10%") +
+  geom_label(x=10,y=0, vjust=0,label = "+8%, -7%") +
+  geom_label(x=15,y=0, vjust=0, label = "+6%, -6%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+6%, -5%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+5%, -5%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 30% Coral Cover") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("Mean Hard Coral Cover (%)")
+p30.lwr
+
+
+# 50%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,50,preds[50,2])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p50.lwr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30))+ ylim(c(0,100))+
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="forestgreen") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=98,label = "50% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = "+10%, -11%") +
+  geom_label(x=10,y=0, vjust=0,label = "+8%, -7%") +
+  geom_label(x=15,y=0, vjust=0, label = "+6%, -6%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+6%, -5%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+5%, -5%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 50% Coral Cover") +
+  theme_classic(base_size=14) + ylab("")
+p50.lwr
+
+g1.lwr = gridExtra::grid.arrange(p10.lwr,p30.lwr,p50.lwr, ncol=1)
+ggsave("MinimumDetectableDifferenceLower.tif", plot=g1.lwr,device="tiff", height = 12, width=9)
+```
+```{r MDD - Fit}
+# 10%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,10,preds[10,1])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.01),
+            Max = quantile(mean, 0.99),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p10 = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + 
+  coord_cartesian(ylim = c(0,25)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkred") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20, 25), linetype = "dotted") +
+  geom_label(x=25,y=23,label = "10% Coral Cover", size=6) +
+  geom_label(x=5,y=0, vjust=0, label = "+27%, NA") +
+  geom_label(x=10,y=0, vjust=0,label = "+16%, -8%") +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=15,y=0, vjust=0, label = "+12%, -7%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+10%, -6%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+8%, -6%") +
+  ggtitle ("Minimum Detectable Difference (MDD) for RHIS") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("")
+p10 
+
+# 30%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,30,preds[30,1])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p30 = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + 
+  coord_cartesian(ylim = c(0,70)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkorange") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=67,label = "30% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = "+34%, -24%") +
+  geom_label(x=10,y=0, vjust=0,label = "+24%, -18%") +
+  geom_label(x=15,y=0, vjust=0, label = "+19%, -15%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+16%, -13%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+15%, -12%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 30% Coral Cover") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("Mean Hard Coral Cover (%)")
+p30
+
+
+# 50%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,50,preds[50,1])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p50 = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30))+ 
+  coord_cartesian(ylim = c(0,100)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="forestgreen") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=98,label = "50% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = "+32%, -32%") +
+  geom_label(x=10,y=0, vjust=0,label = "+23%, -23%") +
+  geom_label(x=15,y=0, vjust=0, label = "+19%, -19%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+17%, -17%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+15%, -15%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 50% Coral Cover") +
+  theme_classic(base_size=14) + ylab("")
+p50
+
+g1 = gridExtra::grid.arrange(p10,p30,p50, ncol=1)
+ggsave("MinimumDetectableDifference.tif", plot=g1,device="tiff", height = 12, width=9)
+
+```
+
+```{r MDD - Upper}
+# Draw 1-20 samples from each 100 times, these will represent the mean you get with each level of replication
+
+# 10%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,10,preds[10,3])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.01),
+            Max = quantile(mean, 0.99),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p10.upr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + 
+  coord_cartesian(ylim = c(0,30)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkred") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkred") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20, 25), linetype = "dotted") +
+  geom_label(x=25,y=23,label = "10% Coral Cover", size=6) +
+  geom_label(x=5,y=0, vjust=0, label = "NA") +
+  geom_label(x=10,y=0, vjust=0,label = "+33%, NA") +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=15,y=0, vjust=0, label = "+25%, NA%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+20%, -NA%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+17%, -9%") +
+  ggtitle ("Minimum Detectable Difference (MDD) for RHIS") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("")
+p10.upr 
+
+# 30%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,30,preds[30,3])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p30.upr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) + 
+  coord_cartesian(ylim = c(0,70)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="darkorange") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="darkorange") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=67,label = "30% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = ">+40%, NA") +
+  geom_label(x=10,y=0, vjust=0,label = "+37%, -27%") +
+  geom_label(x=15,y=0, vjust=0, label = "+31%, -23%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+28%, -20%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+25%, -19%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 30% Coral Cover") +
+  theme_classic(base_size=14) + theme(axis.title.x = element_blank()) + ylab("Mean Hard Coral Cover (%)")
+p30.upr
+
+
+# 50%
+set.seed(123)
+means = matrix(nrow=50, ncol = 1000)
+for (j in 1:1000) {
+  for (i in 2:50) {
+    pred = rnorm(i,50,preds[50,3])
+    # pred[pred<0] = 0
+    means[i,j] = mean(pred)
+  }
+}
+means = means[-1,]
+
+means.df = as.data.frame(means)
+means.df$nObs = as.numeric(row.names(means.df))+1
+means.dfLong = gather(means.df, value= "mean", key = "sim", -nObs)
+
+means.Sum = means.dfLong %>% group_by(nObs) %>%
+  summarise(Mean = mean(mean), 
+            Min = quantile(mean, 0.001),
+            Max = quantile(mean, 0.999),
+            Q95 = quantile(mean, 0.95),
+            Q05 = quantile(mean, 0.05),
+            Q25 = quantile(mean, 0.25),
+            Q75 = quantile(mean, 0.75))
+p50.upr = ggplot(data = means.Sum, aes(x=nObs, y=Mean), colour="black") + xlim(c(2,30)) +
+  coord_cartesian(ylim = c(0,100)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Min, ymax = Max), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q05, ymax = Q95), alpha=0.3, fill="forestgreen") +
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha=0.3, fill="forestgreen") + 
+  geom_hline(yintercept = mean(means.dfLong$mean)) +
+  geom_vline(xintercept = c(5,10,15,20,25), linetype = "dotted") +
+  geom_label(x=25,y=98,label = "50% Coral Cover", size=6) +
+  # geom_label(x=1,y=0, hjust=0, vjust=0, label = "MDD") +
+  geom_label(x=5,y=0, vjust=0, label = ">+40%, <-40%") +
+  geom_label(x=10,y=0, vjust=0,label = "+35%, -36%") +
+  geom_label(x=15,y=0, vjust=0, label = "+30%, -30%") +
+  geom_label(x=20,y=0,vjust=0 ,label = "+27%, -27%") +
+  geom_label(x=25,y=0,vjust=0 ,label = "+24%, -25%") +
+  # ggtitle ("Minimum Detectable Difference (MDD) at 50% Coral Cover") +
+  theme_classic(base_size=14) + ylab("")
+p50.upr
+
+g1.upr = gridExtra::grid.arrange(p10.upr,p30.upr,p50.upr, ncol=1)
+ggsave("MinimumDetectableDifferenceUpper.tif", plot=g1.upr,device="tiff", height = 12, width=9)
+```
+
+```{r Arrange Plots}
+g10 = gridExtra::grid.arrange(
+  p10.lwr + ggtitle("Minimum Detectable Difference (MDD) - Low SD"),
+  p10 + ggtitle("Minimum Detectable Difference (MDD) - Med SD"),
+  p10.upr + ggtitle("Minimum Detectable Difference (MDD) - High SD") + coord_cartesian(ylim = c(0,25)),
+  p30.lwr,p30, p30.upr + coord_cartesian(ylim = c(0,70)),
+  p50.lwr,p50, p50.upr,ncol=3)
+ggsave("MinimumDetectableDifferenceAll.tif", plot=g10,device="tiff", height = 12, width=21)
+```
+
+
