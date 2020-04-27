@@ -151,7 +151,7 @@ diet.long.sum = diet.long %>%
             SE = sd(Number)/sqrt(n))
 diet.long.sum2 = diet.long %>% 
   group_by(Year, Diet) %>%
-  dplyr::summarise(zone = "Total",
+  dplyr::summarise(Zone = "Total",
             n = dplyr::n(),
             Mean = mean(Number),
             SE = sd(Number)/sqrt(n))
@@ -189,12 +189,12 @@ middle8spec = unique(species.long$Species)[!unique(species.long$Species) %in% c(
 
 ```
 
-```{r Butterfly Summaries Diet}
 
-```
 
 
 # Mean Buterfly Fish Abundance vs Coral Cover
+
+Need to fit the actual random effect GAMM's 
 
 ```{r}
 plot.sum = left_join(butt.sum, cor.sum, by = c("Year"))
@@ -210,10 +210,10 @@ p_CoralButt = ggplot(plot.sum, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish
                   shape=21, size=0.8) +
   theme_bw(base_size = 12) +
   scale_fill_manual(values=c("coral", "blue")) +
-  scale_y_continuous("Mean Abundance per Transect (+/- SE)", 
+  scale_y_continuous("Mean Abundance (+/- SE)", 
                      sec.axis = sec_axis(~ .*5, name = "Mean % Coral Cover (+/- SE)")) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
-        legend.position = "bottom", legend.title = element_blank())
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
+        legend.position = "right", legend.title = element_blank())
 
 p_Z = ggplot(plot.sum_Z, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
   coord_cartesian(ylim = c(0,20)) +
@@ -262,53 +262,53 @@ ggsave(filename = "HC_BF_ZoneSite.png", plot = p_ZS, device = "png", width = 10,
 
 
 ```{r Alpha Diversity Plots, echo=F, warning=FALSE, results='hide', message=FALSE}
-p1 = ggplot(butt, aes(x = Year, y= Total)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+p1 = ggplot(butt, aes(x = Year, y= Total)) + geom_point() + geom_smooth() + facet_wrap(~Zone)+
   theme_bw(base_size = 14)
-p2 = ggplot(butt, aes(x = Year, y= SIMPSON)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+p2 = ggplot(butt, aes(x = Year, y= SIMPSON)) + geom_point() + geom_smooth() + facet_wrap(~Zone)+
   theme_bw(base_size = 14)
-p3 = ggplot(butt, aes(x = Year, y= PILOU.EVEN)) + geom_point() + geom_smooth() + facet_wrap(~zone)+
+p3 = ggplot(butt, aes(x = Year, y= PILOU.EVEN)) + geom_point() + geom_smooth() + facet_wrap(~Zone)+
   theme_bw(base_size = 14)
 p4 = ggplot(butt, aes(x = as.factor(Year), y= RICHNESS)) + 
   # geom_point() + 
-  geom_smooth() + facet_wrap(~zone)+ geom_boxplot()
+  geom_smooth() + facet_wrap(~Zone)+ geom_boxplot()
   theme_bw(base_size = 14)
   
-p5 = ggplot(index.long.sum %>%
+p5 = ggplot(index.long.sum2 %>%
               dplyr::filter(Index %in% c("PILOU.EVEN", "RICHNESS.MAR", 
                                          "SHANNON", "Total")), 
             aes(x = Year, y= Mean, fill=Index)) + 
   geom_smooth(colour="black") +
   geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
-  facet_grid(Index~zone, scales = "free_y") + 
-  theme_bw(base_size = 14) +
-  ylab("Mean Response per Transect (+/- SE)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
-        legend.position = "bottom")
+  facet_wrap(~Index, scales = "free_y") + 
+  theme_bw(base_size = 12) +
+  ylab("Mean Response (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),axis.title.x = element_blank(),
+        legend.position = "none")
 
 
 p6 = ggplot(diet.long, aes(x = as.factor(Year), y= Number, fill=Diet)) + 
   # geom_point() +
   geom_smooth() + 
-  facet_grid(Diet~zone, scales = "free_y") + 
+  facet_grid(Diet~Zone, scales = "free_y") + 
   geom_boxplot() +
   theme_bw(base_size = 14)  
 
-p7 = ggplot(diet.long.sum, aes(x = Year, y= Mean, fill=Diet)) + 
-  geom_smooth(colour="black") +
+p7 = ggplot(diet.long.sum2, aes(x = Year, y= Mean, fill=Diet)) + 
+  geom_smooth(colour="black",method = "gam", formula = y ~ s(x, k = 4)) +
   geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
-  facet_grid(Diet~zone, scales = "free_y") + 
+  facet_wrap(~Diet, scales = "free_y") + 
   # geom_boxplot() +
   scale_x_continuous() + 
-  theme_bw(base_size = 14) +
-  ylab("Mean Abundance per Transect (+/- SE)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1),
-        legend.position = "bottom")
+  theme_bw(base_size = 12) +
+  ylab("Mean Abundance (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
+        legend.position = "none")
 
 p8 = ggplot(species.long.sum %>% filter(Species %in% top8spec), 
             aes(x = Year, y= Mean, fill=Species)) + 
   geom_smooth(colour="black") +
   geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
-  facet_grid(Species~zone, scales = "free_y") + 
+  facet_grid(Species~Zone, scales = "free_y") + 
   # geom_boxplot() +
   scale_x_continuous() + 
   ggtitle("Top Species by Abundance (1:7)") + 
@@ -333,7 +333,7 @@ p10 = ggplot(species.long.sum %>% filter(Species %in% c(bottom8spec, "Total")),
             aes(x = Year, y= Mean, fill=Species)) + 
   geom_smooth(colour="black") +
   geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
-  facet_grid(Species~zone, scales = "free_y") + 
+  facet_grid(Species~Zone, scales = "free_y") + 
   # geom_boxplot() +
   scale_x_continuous() + 
   ggtitle("Top Species by Abundance (16:23)") + 
@@ -345,6 +345,9 @@ ggsave(filename = "top1_7.png", plot = p8, device = "png", width = 8, height=12,
 ggsave(filename = "top8_15.png", plot = p9, device = "png", width = 8, height=12, dpi = 300)
 ggsave(filename = "top16_23.png", plot = p10, device = "png", width = 8, height=12, dpi = 300)
 
+
+gridExtra::grid.arrange(p_CoralButt, p5, ncol=1)
+gridExtra::grid.arrange(p7, pMod1, ncol=1)
 
 ```
 
@@ -433,6 +436,8 @@ CORAL.dis <- vegdist(butt.faun2, "bray")
 # NMDS
 CORAL.nmds <- metaMDS(butt.faun2)
 
+# Make summmaries at site level --> not fixed transects
+
 # Analysis of Similarity - ANOSIM
 # CORAL.ano <- anosim(CORAL.dis, butt.samp2$zone)
 # # Print pVal
@@ -443,8 +448,8 @@ CORAL.nmds <- metaMDS(butt.faun2)
 # Get Scores to build in GGplot
 data.scores <- as.data.frame(scores(CORAL.nmds))  #Using the scores function from vegan to extract the site scores and convert to a data.frame
 data.scores$site <- rownames(data.scores)  # create a column of site names, from the rownames of data.scores
-data.scores$grp <- butt.samp2$zone
-data.scores$location <- butt.samp2$site
+data.scores$grp <- butt.samp2$Zone
+data.scores$location <- butt.samp2$Site
 data.scores$yr <- butt.samp2$Year
 
 #  add the grp variable created earlier
@@ -486,20 +491,129 @@ grp.d <- data.scores[data.scores$grp == "Slope", ][chull(data.scores[data.scores
 hull.data = hull.data %>% filter(!site %in% c(915, 759,760))
 data.scores = data.scores %>% filter(!site %in% c(915, 759,760))
 # species.scores = species.scores %>% filter(!site %in% 915)
+data.scoresFvL = data.scores %>%  filter(yr %in% c(1995, 2020))
+hull.dataFvL = hull.data %>% filter(yr %in% c(1995, 2020))
+
+
+spread_n <- function(df, key, value) {
+    # quote key
+    keyq <- rlang::enquo(key)
+    # break value vector into quotes
+    valueq <- rlang::enquo(value)
+    s <- rlang::quos(!!valueq)
+    df %>% gather(variable, value, !!!s) %>%
+        unite(temp, !!keyq, variable) %>%
+        spread(temp, value)
+}
+# Calculate vectors between two points
+data.scoresFvL_W = data.scoresFvL %>% spread_n(yr, c(NMDS1, NMDS2))
+```
+
+### Community Composition 1995 vs 2020
+
+```{r NMDS Community Comp - Site Level, echo=F, cache=TRUE, warning=FALSE, results='hide', message=FALSE}
+#### NMDS COmpositoin Plot ####
+
+# Make a summary at the site level as each transect was not fixed
+butt.SUM = butt %>% group_by(Year, Site, Zone) %>%
+  summarise_at(vars(-group_cols()), funs(mean)) %>% filter(Year %in% c(1995,2020))
+
+library(vegan)
+library(MASS)
+
+butt.samp = butt.SUM[1:3]
+butt.faun = butt.SUM[5:27]
+
+
+BUTT.dis <- vegdist(butt.faun, "horn")
+# NMDS
+BUTT.nmds <- metaMDS(butt.faun)
+
+# Get Scores to build in GGplot
+data.scores <- as.data.frame(scores(BUTT.nmds))  #Using the scores function from vegan to extract the site scores and convert to a data.frame
+data.scores$site <- as.integer(rownames(data.scores))  # create a column of site names, from the rownames of data.scores
+data.scores$grp <- butt.samp$Zone
+data.scores$location <- butt.samp$Site
+data.scores$yr <- butt.samp$Year
+
+#  add the grp variable created earlier
+head(data.scores)  #look at the data
+
+species.scores <- as.data.frame(scores(BUTT.nmds, "species"))  #Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores$species <- rownames(species.scores)  # create a column of species, from the rownames of species.scores
+head(species.scores)
+
+grps = levels(data.scores$grp)
+locs = levels(data.scores$location)
+yrs = unique(data.scores$yr)
+
+hull.data = data.scores[-(1:nrow(data.scores)),]
+for (g in 1:length(grps)){
+  # for(l in 1:length(locs)){
+    for(y in 1:length(yrs)){
+      grp = data.scores[data.scores$grp == grps[g] &
+                        # data.scores$location == locs[l] &
+                        data.scores$yr == yrs[y], ][chull(data.scores[data.scores$grp == grps[g] &
+                        # data.scores$location == locs[l] &
+                        data.scores$yr == yrs[y], c("NMDS1", "NMDS2")]), ]
+      hull.data = rbind(hull.data, grp)
+      
+    }
+  }
+# }
+# Assign groups to Reef to plot convex hull
+grp.a <- data.scores[data.scores$grp == "Base", ][chull(data.scores[data.scores$grp == 
+                                                                          "Base", c("NMDS1", "NMDS2")]), ]  # hull values for grp A
+grp.b <- data.scores[data.scores$grp == "Crest", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Crest", c("NMDS1", "NMDS2")]), ]  
+grp.c <- data.scores[data.scores$grp == "Flat", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Flat", c("NMDS1", "NMDS2")]), ]  
+grp.d <- data.scores[data.scores$grp == "Slope", ][chull(data.scores[data.scores$grp == 
+                                                                                    "Slope", c("NMDS1", "NMDS2")]), ]  
+# hull values for grp B
+# hull.data <- rbind(grp.a, grp.b, grp.c, grp.d)  #combine grp.a and grp.b
+hull.data = hull.data %>% filter(!site %in% c(915, 759,760))
+data.scores = data.scores %>% filter(!site %in% c(915, 759,760))
+# species.scores = species.scores %>% filter(!site %in% 915)
+data.scoresFvL = data.scores %>%  filter(yr %in% c(1995, 2020))
+hull.dataFvL = hull.data %>% filter(yr %in% c(1995, 2020))
+
+hull.dataFvL$grpyr = paste0(hull.dataFvL$grp, hull.dataFvL$yr)
+data.scoresFvL$grpyr = paste0(data.scoresFvL$grp, data.scoresFvL$yr)
+
+spread_n <- function(df, key, value) {
+    # quote key
+    keyq <- rlang::enquo(key)
+    # break value vector into quotes
+    valueq <- rlang::enquo(value)
+    s <- rlang::quos(!!valueq)
+    df %>% gather(variable, value, !!!s) %>%
+        unite(temp, !!keyq, variable) %>%
+        spread(temp, value)
+}
+# Calculate vectors between two points
+data.scoresFvL_W = data.scoresFvL %>% dplyr::select(-site, -grpyr) %>%
+  spread_n(yr, c(NMDS1, NMDS2))
 ```
 
 ```{r}
 pHull =ggplot() + 
-  geom_polygon(data=hull.data,aes(x=NMDS1,y=NMDS2,fill=grp,group=grp),alpha=0.30) + # add the convex hulls
-  geom_point(data=data.scores,aes(x=NMDS1,y=NMDS2,shape=grp,colour=grp),size=3) + # add the point markers
-  # geom_label(data=species.scores,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
-  scale_colour_manual(labels = levels(butt.samp2$zone), values=c( "seagreen", "orange", "lightblue", "purple")) +
-  scale_fill_manual(labels = levels(butt.samp2$zone),values=c( "seagreen", "orange", "lightblue", "purple")) +
-  scale_shape_manual(labels = levels(butt.samp2$zone), values = 16:19) +
+  geom_polygon(data=hull.dataFvL,
+               aes(x=NMDS1,y=NMDS2,fill=as.factor(yr),group=as.factor(yr)),alpha=0.5) + # add the convex hulls
+  geom_point(data=data.scoresFvL,aes(x=NMDS1,y=NMDS2,fill=as.factor(yr),shape=as.factor(yr),
+                                     colour=as.factor(yr)),size=2) + # add the point markers
+  geom_segment(data=data.scoresFvL_W, 
+               aes(x=`1995_NMDS1`, y=`1995_NMDS2`, xend=`2020_NMDS1`, yend=`2020_NMDS2`), 
+               arrow = arrow(angle = 30, type = "closed", length = unit(0.25, "cm")), colour="darkgrey") + 
+  geom_label(data=species.scores %>% filter (species %in% top8spec),
+             aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+  scale_colour_manual(labels = c("1995", "2020"), values=c( "seagreen", "orange")) +
+  scale_fill_manual(labels = c("1995", "2020"),values=c( "seagreen", "orange")) +
+  scale_shape_manual(labels = c("1995", "2020"), values = 16:17) +
   coord_equal() +
-  guides(fill=guide_legend(title="Habitat", reverse =T)) +
-  guides(color=guide_legend(title="Habitat", reverse =T)) +
-  guides(shape=guide_legend(title="Habitat", reverse =T)) +
+  guides(fill=guide_legend(title="Year", reverse =F)) +
+  guides(color=guide_legend(title="Year", reverse =F)) +
+  guides(shape=guide_legend(title="Year", reverse =F)) +
   # geom_rect(aes(ymin = 0.75, ymax = 0.95, xmin = 0.55, xmax = 0.99), fill= "white", color = "black") +
   # annotate(geom="text", x=0.99, y=0.9, label="Stress = 0.099", hjust=1) +
   # annotate(geom="text", x=0.99, y=0.83, label="R = 0.863", hjust=1) +
@@ -516,19 +630,27 @@ pHull =ggplot() +
         panel.grid.major = element_blank(),  #remove major-grid labels
         panel.grid.minor = element_blank(),  #remove minor-grid labels
         plot.background = element_blank()) +
-  facet_grid(yr~location)
+  facet_wrap(~grp, ncol = 2)
 
 pHull2 =ggplot() + 
-  geom_polygon(data=hull.data,aes(x=NMDS1,y=NMDS2,fill=grp,group=grp),alpha=0.30) + # add the convex hulls
-  geom_point(data=data.scores,aes(x=NMDS1,y=NMDS2,shape=grp,colour=grp),size=4) + # add the point markers
-  # geom_label(data=species.scores,aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
-  scale_colour_manual(labels = levels(butt.samp2$zone), values=c( "seagreen", "orange", "lightblue", "purple")) +
-  scale_fill_manual(labels = levels(butt.samp2$zone),values=c( "seagreen", "orange", "lightblue", "purple")) +
-  scale_shape_manual(labels = levels(butt.samp2$zone), values = 16:19) +
+  geom_polygon(data=hull.dataFvL,
+               aes(x=NMDS1,y=NMDS2,fill=grp,group=grpyr, alpha=as.factor(yr))) + # add the convex hulls
+  geom_point(data=data.scoresFvL,aes(x=NMDS1,y=NMDS2,fill=grp,shape=as.factor(yr),
+                                     colour=grp),size=2) + # add the point markers
+  geom_segment(data=data.scoresFvL_W, 
+               aes(x=`1995_NMDS1`, y=`1995_NMDS2`, xend=`2020_NMDS1`, yend=`2020_NMDS2`), 
+               arrow = arrow(angle = 30, type = "closed", length = unit(0.25, "cm")), colour="darkgrey") + 
+  geom_label(data=species.scores %>% filter (species %in% top8spec),
+             aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+  scale_colour_manual(labels = grps, values=c( "purple", "orange", "yellow", "violetred1")) +
+  scale_fill_manual(labels = grps,values=c(  "purple", "orange", "yellow", "violetred1")) +
+  scale_shape_manual(labels = c("1995", "2020"), values = 16:17) +
+  scale_alpha_manual(labels = c("1995", "2020"), values = c(0.7, 0.3)) +
   coord_equal() +
-  guides(fill=guide_legend(title="Habitat", reverse =T)) +
-  guides(color=guide_legend(title="Habitat", reverse =T)) +
-  guides(shape=guide_legend(title="Habitat", reverse =T)) +
+  guides(fill=guide_legend(title="Habitat", reverse =F)) +
+  guides(color=guide_legend(title="Habitat", reverse =F)) +
+  guides(shape=guide_legend(title="Year", reverse =F)) +
+  guides(alpha=guide_legend(title="Year", reverse =F)) +
   # geom_rect(aes(ymin = 0.75, ymax = 0.95, xmin = 0.55, xmax = 0.99), fill= "white", color = "black") +
   # annotate(geom="text", x=0.99, y=0.9, label="Stress = 0.099", hjust=1) +
   # annotate(geom="text", x=0.99, y=0.83, label="R = 0.863", hjust=1) +
@@ -544,10 +666,44 @@ pHull2 =ggplot() +
         panel.background = element_blank(), 
         panel.grid.major = element_blank(),  #remove major-grid labels
         panel.grid.minor = element_blank(),  #remove minor-grid labels
-        plot.background = element_blank()) +
-  facet_wrap(~yr, nrow = 2)
+        plot.background = element_blank())
 
-# ggsave(plot = pHull, file="Community.png",dpi=300, height=12, width=6)
+# pHull3 =ggplot() + 
+#   geom_polygon(data=hull.dataFvL %>% ungroup(),
+#                aes(x=NMDS1,y=NMDS2, group=as.factor(yr),alpha=as.factor(yr))) + # add the convex hulls
+#   geom_point(data=data.scoresFvL,aes(x=NMDS1,y=NMDS2,shape=as.factor(yr)),size=2) + # add the point markers
+#   geom_segment(data=data.scoresFvL_W, 
+#                aes(x=`1995_NMDS1`, y=`1995_NMDS2`, xend=`2020_NMDS1`, yend=`2020_NMDS2`), 
+#                arrow = arrow(angle = 30, type = "closed", length = unit(0.25, "cm")), colour="darkgrey") + 
+#   geom_label(data=species.scores %>% filter (species %in% top8spec),
+#              aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+#   scale_colour_manual(values=c( "seagreen")) +
+#   scale_fill_manual(values=c( "seagreen")) +
+#   scale_shape_manual(labels = c("1995", "2020"), values = 16:17) +
+#   scale_alpha_manual(labels = c("1995", "2020"), values = c(0.7, 0.3)) +
+#   coord_equal() +
+#   # guides(fill=guide_legend(title="Habitat", reverse =F)) +
+#   # guides(color=guide_legend(title="Habitat", reverse =F)) +
+#   guides(shape=guide_legend(title="Year", reverse =F)) +
+#   guides(alpha=guide_legend(title="Year", reverse =F)) +
+#   # geom_rect(aes(ymin = 0.75, ymax = 0.95, xmin = 0.55, xmax = 0.99), fill= "white", color = "black") +
+#   # annotate(geom="text", x=0.99, y=0.9, label="Stress = 0.099", hjust=1) +
+#   # annotate(geom="text", x=0.99, y=0.83, label="R = 0.863", hjust=1) +
+#   # annotate(geom="text", x=0.99, y=0.76, label="P = 0.001", hjust=1) +
+#   theme_bw(base_size=14) +
+#   # ggtitle("(b)")+
+#   theme(axis.text.x = element_blank(),  # remove x-axis text
+#         axis.text.y = element_blank(), # remove y-axis text
+#         axis.ticks = element_blank(),  # remove axis ticks
+#         legend.position = "top",
+#         # axis.title.x = element_text(size=18), # remove x-axis labels
+#         # axis.title.y = element_text(size=18), # remove y-axis labels
+#         panel.background = element_blank(), 
+#         panel.grid.major = element_blank(),  #remove major-grid labels
+#         panel.grid.minor = element_blank(),  #remove minor-grid labels
+#         plot.background = element_blank())
+
+ggsave(plot = pHull, file="CommunityAggregated.png",dpi=300, height=12, width=6)
 # ggsave(plot = pHull2, file="Community2.png",dpi=300, height=10, width=10)
 # butt.simp = simper(butt.faun2, group = butt.samp2$zone)
 # summary(butt.simp)
@@ -619,7 +775,7 @@ hist(plot.sum_ZS$Mean)
 mod1 = lm(Mean~MeanHC + Zone + Site, data=plot.sum_ZS)
 summary(mod1)
 car::Anova(mod1)
-lmerTest::rand(mod1)
+# lmerTest::rand(mod1)
 library(ggeffects)
 pred1 = ggpredict(mod1, ~MeanHC) 
 pred2 = ggpredict(mod1, ~Site) 
@@ -686,10 +842,12 @@ pMod1 = ggplot(predAll, aes(y = predicted, x = x, colour = Diet, fill=Diet)) +
     geom_line( size=1) +
     geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, alpha = 0.3, color = NA ) + 
     scale_y_continuous("Mean Butterflyfish Abundance") +
-    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 14) +
-    theme(axis.title.y = element_text(vjust = 1,
-    size = rel(1.25)), legend.position = "bottom", 
-    axis.title.x = element_text(vjust = -1, size = rel(1.25)))
+    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 12) +
+    theme(axis.title.y = element_text(vjust = 1), legend.position = "bottom", 
+    axis.title.x = element_text(vjust = -1))
+
+ggplot(diet.sum.modAll, aes(x=MeanHC, y=Mean, colour=Diet)) + geom_smooth(method="lm") + geom_point() +
+  facet_wrap(~Year)
 
 pMod2 = ggplot(predAll2, aes(y = predicted, x = x, colour = Diet, fill=Diet)) + 
     # geom_point(data = diet.sum.modAll, aes(y = Mean, x=Site, alpha=0.3)) + 
