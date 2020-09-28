@@ -202,18 +202,22 @@ plot.sum_Z = left_join(butt.sum_Z, cor.sum_Z, by = c("Year", "Zone"))
 plot.sum_S = left_join(butt.sum_S, cor.sum_S, by = c("Year", "Site"))
 plot.sum_ZS = left_join(butt.sum_ZS, cor.sum_ZS, by = c("Year", "Site", "Zone"))
 
-p_CoralButt = ggplot(plot.sum, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
+p_CoralButt = ggplot(plot.sum, aes(x=Year)) + 
+  geom_smooth(aes(y=Mean, fill="Butterflyfish"), 
+              method="gam",formula = y ~ s(x, k = 5), colour="black") +
   coord_cartesian(ylim = c(0,20)) +
-  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Fish"), shape=21, size=0.8) + 
-  geom_smooth(aes(y=MeanHC/5, fill="Coral Cover"),colour="black") +
+  geom_pointrange(aes(y=Mean,ymin = Mean-SE, ymax=Mean+SE, fill="Butterflyfish"), 
+                  shape=21, size=0.8) + 
+  geom_smooth(aes(y=MeanHC/5, fill="Coral Cover"),
+              method="gam",formula = y ~ s(x, k = 5), colour="black") +
   geom_pointrange(aes(y=MeanHC/5,ymin = MeanHC/5-SEHC/5, ymax=MeanHC/5+SEHC/5, fill="Coral Cover"), 
                   shape=21, size=0.8) +
   theme_bw(base_size = 12) +
-  scale_fill_manual(values=c("coral", "blue")) +
-  scale_y_continuous("Mean Abundance (+/- SE)", 
+  scale_fill_manual(values=c("blue", "coral")) +
+  scale_y_continuous("Mean Butterflyfish Abundance (+/- SE)", 
                      sec.axis = sec_axis(~ .*5, name = "Mean % Coral Cover (+/- SE)")) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
-        legend.position = "right", legend.title = element_blank())
+        legend.position = "bottom", legend.title = element_blank())
 
 p_Z = ggplot(plot.sum_Z, aes(x=Year)) + geom_smooth(aes(y=Mean, fill="Fish"), colour="black") +
   coord_cartesian(ylim = c(0,20)) +
@@ -304,6 +308,17 @@ p7 = ggplot(diet.long.sum2, aes(x = Year, y= Mean, fill=Diet)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
         legend.position = "none")
 
+pDiet = ggplot(diet.long.sum2 %>% filter(!Diet == "Total"), aes(x = Year, y= Mean, fill=Diet)) + 
+  geom_smooth(colour="black",method = "gam", formula = y ~ s(x, k = 4)) +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  # facet_wrap(~Diet, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() +scale_fill_viridis_d() +
+  theme_bw(base_size = 12) +
+  ylab("Mean Abundance (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
+        legend.position = "bottom")
+
 p8 = ggplot(species.long.sum %>% filter(Species %in% top8spec), 
             aes(x = Year, y= Mean, fill=Species)) + 
   geom_smooth(colour="black") +
@@ -345,10 +360,51 @@ ggsave(filename = "top1_7.png", plot = p8, device = "png", width = 8, height=12,
 ggsave(filename = "top8_15.png", plot = p9, device = "png", width = 8, height=12, dpi = 300)
 ggsave(filename = "top16_23.png", plot = p10, device = "png", width = 8, height=12, dpi = 300)
 
+lay = rbind(c(1,2),
+            c(3,3))
 
+pMod1 = ggplot(predAll, aes(y = predicted, x = x,colour=Diet, fill=Diet)) + 
+    geom_point(data = diet.sum.modAll, aes(y = Mean, x=MeanHC), alpha=0.5) + 
+    geom_line( size=1, colur="grey55") +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, alpha = 0.5, color = NA ) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_fill_viridis_d(name = "Corallivores",labels = c("Facultative", "Non", "Obligatory")) +
+    scale_colour_viridis_d(name = "Corallivores",labels = c("Facultative", "Non", "Obligatory")) +
+    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 12) +
+    theme(axis.title.y = element_text(vjust = 1), legend.position = "bottom", 
+    axis.title.x = element_text(vjust = -1))
+
+pModGAM = ggplot(diet.sum.modAll, aes(y = Mean, x=MeanHC,colour=Diet, fill=Diet)) + 
+    geom_point(data = diet.sum.modAll, aes(y = Mean, x=MeanHC), alpha=0.5) + 
+    geom_smooth(method = "gam", formula = y ~ s(x, k = 5)) +
+    # geom_line( size=1, colur="grey55") +
+    # geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, alpha = 0.5, color = NA ) + 
+    scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_fill_viridis_d(name = "Corallivores",labels = c("Facultative", "Non", "Obligatory")) +
+    scale_colour_viridis_d(name = "Corallivores",labels = c("Facultative", "Non", "Obligatory")) +
+    scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 12) +
+    theme(axis.title.y = element_text(vjust = 1), legend.position = "bottom", 
+    axis.title.x = element_text(vjust = -1))
+
+pDiet = ggplot(diet.long.sum2 %>% filter(!Diet == "Total"), aes(x = Year, y= Mean, fill=Diet)) + 
+  geom_smooth(colour="black",method = "gam", formula = y ~ s(x, k = 4)) +
+  geom_pointrange(aes(ymin = Mean-SE, ymax=Mean+SE), shape=21, size=0.8) +
+  # facet_wrap(~Diet, scales = "free_y") + 
+  # geom_boxplot() +
+  scale_x_continuous() +
+  scale_fill_viridis_d(name = "Corallivores",labels = c("Facultative", "Non", "Obligatory")) +
+  theme_bw(base_size = 12) +
+  ylab("Mean Butterflyfish Abundance (+/- SE)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1), axis.title.x = element_blank(),
+        legend.position = "bottom")
+
+g = gridExtra::arrangeGrob(p_CoralButt,pDiet, pModGAM, layout_matrix = lay)
 gridExtra::grid.arrange(p_CoralButt, p5, ncol=1)
-gridExtra::grid.arrange(p7, pMod1, ncol=1)
+gridExtra::grid.arrange(p_CoralButt,pDiet, pMod1, layout_matrix = lay)
 
+ggsave(filename = "Figures/Figure1.png", g, device = "png", width = 8, height=8, dpi = 300)
+ggsave(filename = "Figures/Figure1.tiff", g, device = "tiff", width = 8, height=8, dpi = 300)
+ggsave(filename = "Figures/Figure1.svg", g, device = "svg", width = 8, height=8, dpi = 300)
 ```
 
 ## Diversity and Richness Indicies by Habitat
@@ -842,6 +898,7 @@ pMod1 = ggplot(predAll, aes(y = predicted, x = x, colour = Diet, fill=Diet)) +
     geom_line( size=1) +
     geom_ribbon(aes(ymin = conf.low, ymax = conf.high), size=1, alpha = 0.3, color = NA ) + 
     scale_y_continuous("Mean Butterflyfish Abundance") +
+    scale_fill_viridis_d() + scale_colour_viridis_d() +
     scale_x_continuous("Mean Hard Coral Cover (%)") + theme_bw(base_size = 12) +
     theme(axis.title.y = element_text(vjust = 1), legend.position = "bottom", 
     axis.title.x = element_text(vjust = -1))
