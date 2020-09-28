@@ -653,6 +653,8 @@ data.scoresFvL_W = data.scoresFvL %>% dplyr::select(-site, -grpyr) %>%
 ```
 
 ```{r}
+species.scores$Diet = str_sub(species.scores$species, 1,2)
+species.scores$Species = str_sub(species.scores$species, 6,nchar(species.scores$species))
 pHull =ggplot() + 
   geom_polygon(data=hull.dataFvL,
                aes(x=NMDS1,y=NMDS2,fill=as.factor(yr),group=as.factor(yr)),alpha=0.5) + # add the convex hulls
@@ -662,7 +664,7 @@ pHull =ggplot() +
                aes(x=`1995_NMDS1`, y=`1995_NMDS2`, xend=`2020_NMDS1`, yend=`2020_NMDS2`), 
                arrow = arrow(angle = 30, type = "closed", length = unit(0.25, "cm")), colour="darkgrey") + 
   geom_label(data=species.scores %>% filter (species %in% top8spec),
-             aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+             aes(x=NMDS1,y=NMDS2,label=Species),alpha=0.5, fontface = "italic", hjust=0) +  # add the species labels
   scale_colour_manual(labels = c("1995", "2020"), values=c( "seagreen", "orange")) +
   scale_fill_manual(labels = c("1995", "2020"),values=c( "seagreen", "orange")) +
   scale_shape_manual(labels = c("1995", "2020"), values = 16:17) +
@@ -679,7 +681,7 @@ pHull =ggplot() +
   theme(axis.text.x = element_blank(),  # remove x-axis text
         axis.text.y = element_blank(), # remove y-axis text
         axis.ticks = element_blank(),  # remove axis ticks
-        legend.position = "top",
+        legend.position = "bottom",
         # axis.title.x = element_text(size=18), # remove x-axis labels
         # axis.title.y = element_text(size=18), # remove y-axis labels
         panel.background = element_blank(), 
@@ -697,7 +699,7 @@ pHull2 =ggplot() +
                aes(x=`1995_NMDS1`, y=`1995_NMDS2`, xend=`2020_NMDS1`, yend=`2020_NMDS2`), 
                arrow = arrow(angle = 30, type = "closed", length = unit(0.25, "cm")), colour="darkgrey") + 
   geom_label(data=species.scores %>% filter (species %in% top8spec),
-             aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5) +  # add the species labels
+             aes(x=NMDS1,y=NMDS2,label=species),alpha=0.5, hjust=0) +  # add the species labels
   scale_colour_manual(labels = grps, values=c( "purple", "orange", "yellow", "violetred1")) +
   scale_fill_manual(labels = grps,values=c(  "purple", "orange", "yellow", "violetred1")) +
   scale_shape_manual(labels = c("1995", "2020"), values = 16:17) +
@@ -759,7 +761,9 @@ pHull2 =ggplot() +
 #         panel.grid.minor = element_blank(),  #remove minor-grid labels
 #         plot.background = element_blank())
 
-ggsave(plot = pHull, file="CommunityAggregated.png",dpi=300, height=12, width=6)
+ggsave(plot = pHull, file="Figures/CommunityAggregated.png",dpi=300, height=7, width=7)
+ggsave(plot = pHull, file="Figures/CommunityAggregated.tiff",dpi=300, height=7, width=7)
+ggsave(plot = pHull, file="Figures/CommunityAggregated.svg",dpi=300, height=7, width=7)
 # ggsave(plot = pHull2, file="Community2.png",dpi=300, height=10, width=10)
 # butt.simp = simper(butt.faun2, group = butt.samp2$zone)
 # summary(butt.simp)
@@ -802,9 +806,9 @@ summary(butt.simp.site)
 
 ```{r Indicative Species, cache=F}
 # install.packages("indicspecies")
-indval = indicspecies::multipatt(butt.faun2, butt.samp2$zone,
+indval = indicspecies::multipatt(butt.faun2, butt.samp2$Zone,
   control = how(nperm=999))
-indval.site = indicspecies::multipatt(butt.faun2, butt.samp2$site,
+indval.site = indicspecies::multipatt(butt.faun2, butt.samp2$Site,
   control = how(nperm=999))
 # indval.year = indicspecies::multipatt(butt.faun2, butt.samp2$Year,
 #   control = how(nperm=999))
