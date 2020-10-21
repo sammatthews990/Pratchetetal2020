@@ -24,7 +24,7 @@ This analysis will focus on the temporal and habitat trends of Buttterfy fish po
 # 1. Temporal trends
 
 
-```{r Setup, echo=F, warning=FALSE, results='hide', message=FALSE}
+```{r Load Data, echo=F, warning=FALSE, results='hide', message=FALSE}
 library(tidyverse)
 library(plyr)
 library(vegan)
@@ -810,6 +810,32 @@ indval = indicspecies::multipatt(butt.faun2, butt.samp2$Zone,
   control = how(nperm=999))
 indval.site = indicspecies::multipatt(butt.faun2, butt.samp2$Site,
   control = how(nperm=999))
+
+Years = unique(butt.samp2$Year)
+ind.list = list()
+for (i in 1: length(Years)) {
+ yrindex = which(butt.samp2$Year == Years[i])
+ butt.faun.sub = butt.faun2[yrindex,]
+ butt.samp.sub = butt.samp2[yrindex,]
+ ind.list[[i]] = indicspecies::multipatt(butt.faun.sub, butt.samp.sub$Zone,control = how(nperm=999))
+ names(ind.list)[i] = Years[i]
+}
+df = ind.list[["1995"]][["sign"]]
+maxIndval = max(df$index, na.rm = T)
+Generalists = df %>% filter(index == maxIndval) %>% mutate(Type = "Generalist", Year = Years[1], Species = row.names(.))
+Specialists = df %>% filter(p.value <=0.05) %>% mutate(Type = "Specialist", Year = Years[1], Species = row.names(.))
+df = bind_rows(Generalists, Specialists)
+
+df = df[-c(1:nrow(df)),]
+
+for (i in 1: length(Years)) {
+  dfsub = ind.list[[i]][["sign"]]
+  maxIndval = max(dfsub$index, na.rm = T)
+  Generalists = dfsub %>% filter(index == maxIndval) %>% mutate(Type = "Generalist", Year = Years[i], Species = row.names(.))
+  Specialists = dfsub %>% filter(p.value <=0.1) %>% mutate(Type = "Specialist", Year = Years[i], Species = row.names(.))
+  df = bind_rows(df,Generalists,Specialists)
+}
+
 # indval.year = indicspecies::multipatt(butt.faun2, butt.samp2$Year,
 #   control = how(nperm=999))
 ```
