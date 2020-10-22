@@ -836,8 +836,39 @@ for (i in 1: length(Years)) {
   df = bind_rows(df,Generalists,Specialists)
 }
 
+# Spread and gather by Year and fill with NA
+SvsG = df %>% dplyr::select(-index, -p.value, -stat) %>%
+  gather(Hab, value, -Year, -Species,-Type) %>%
+  spread(Year, value, fill = NA) %>%
+  gather(Year, value, -Species, -Hab, -Type) %>%
+  mutate(Hab = factor(Hab, levels = c("s.Base", "s.Slope", "s.Crest", "s.Flat")),
+         Year = factor(Year),
+         value = ifelse(value ==0, NA, value)) 
 # indval.year = indicspecies::multipatt(butt.faun2, butt.samp2$Year,
 #   control = how(nperm=999))
+
+# MAke Tile Graph
+ggplot(SvsG, aes(x=Hab,y=Year, fill = as.factor(value))) + geom_tile() + 
+  scale_y_discrete(limits = rev(levels(SvsG$Year))) +
+  facet_wrap(~Species) + 
+  scale_fill_manual(values = c("seagreen2", "grey50")) + theme_bw(base_size = 14)
+
+dfAll = indval[["sign"]]
+maxIndval = max(dfAll$index, na.rm = T)
+Generalists = dfAll %>% filter(index == maxIndval) %>% 
+  mutate(Type = "Generalist", Species = row.names(.))
+Specialists = dfAll %>% filter(p.value <=0.1) %>% 
+  mutate(Type = "Specialist", Species = row.names(.))
+dfAll = bind_rows(Generalists,Specialists)
+
+SvsGAll = dfAll %>% dplyr::select(-index, -p.value, -stat) %>%
+  gather(Hab, value, -Species,-Type) %>%
+  mutate(Hab = factor(Hab, levels = c("s.Base", "s.Slope", "s.Crest", "s.Flat")),
+         value = ifelse(value ==0, NA, value))
+
+ggplot(SvsGAll, aes(x=Hab,y=Species, fill = as.factor(value))) + geom_tile() + 
+  scale_fill_manual(values = c("seagreen2", "grey50")) + theme_bw(base_size = 14)
+
 ```
 
 ## Indicative Species by Habitat
