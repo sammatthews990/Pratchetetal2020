@@ -835,23 +835,36 @@ for (i in 1: length(Years)) {
   Specialists = dfsub %>% filter(p.value <=0.1) %>% mutate(Type = "Specialist", Year = Years[i], Species = row.names(.))
   df = bind_rows(df,Generalists,Specialists)
 }
-
+mutate(Diet = substr(Species,1,2),
+         Species2 = substr(Species, 6, nchar(Species)),
+         Species = paste0(Species2, " (", Diet, ")"))
 # Spread and gather by Year and fill with NA
-SvsG = df %>% dplyr::select(-index, -p.value, -stat) %>%
-  gather(Hab, value, -Year, -Species,-Type) %>%
+SvsG = df %>% 
+  mutate(Diet = substr(Species,1,2),
+         Species2 = substr(Species, 6, nchar(Species)),
+         Species = paste0(Species2, " (", Diet, ")")) %>%
+  dplyr::select(-index, -p.value, -stat) %>%
+  mutate(Ave = (s.Base+s.Slope+s.Crest+s.Flat)) %>%
+  gather(Hab, value, -Year, -Species,-Type, -Ave) %>%
   spread(Year, value, fill = NA) %>%
-  gather(Year, value, -Species, -Hab, -Type) %>%
+  gather(Year, value, -Species, -Hab, -Type, -Ave) %>%
+  mutate(value = as.numeric(value)) %>%
   mutate(Hab = factor(Hab, levels = c("s.Base", "s.Slope", "s.Crest", "s.Flat")),
          Year = factor(Year),
-         value = ifelse(value ==0, NA, value)) 
+         value = ifelse(value ==0, NA, value)*Ave) 
 # indval.year = indicspecies::multipatt(butt.faun2, butt.samp2$Year,
 #   control = how(nperm=999))
 
 # MAke Tile Graph
-ggplot(SvsG, aes(x=Hab,y=Year, fill = as.factor(value))) + geom_tile() + 
-  scale_y_discrete(limits = rev(levels(SvsG$Year))) +
+pIndYear = ggplot(SvsG, aes(x=Year,y=Hab, fill = as.factor(value))) + geom_tile() + 
+  # scale_x_discrete(limits = rev(levels(SvsG$Year))) +
   facet_wrap(~Species) + 
-  scale_fill_manual(values = c("seagreen2", "grey50")) + theme_bw(base_size = 14)
+  scale_fill_manual(values=c("yellow", "#CCEF49", "#94DE68", "seagreen3"),na.translate=F) +
+  labs(fill = "Number of Habitats", x= "Habitat") +
+  scale_y_discrete(labels = c("Base", "Slope", "Crest", "Flat"), na.translate=F) +
+  theme_bw(base_size = 14) + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust=1))
 
 dfAll = indval[["sign"]]
 maxIndval = max(dfAll$index, na.rm = T)
@@ -859,15 +872,39 @@ Generalists = dfAll %>% filter(index == maxIndval) %>%
   mutate(Type = "Generalist", Species = row.names(.))
 Specialists = dfAll %>% filter(p.value <=0.1) %>% 
   mutate(Type = "Specialist", Species = row.names(.))
-dfAll = bind_rows(Generalists,Specialists)
+dfAll = bind_rows(Generalists,Specialists) %>%
+  mutate(Diet = substr(Species,1,2),
+         Species2 = substr(Species, 6, nchar(Species)),
+         Species = paste0(Species2, " (", Diet, ")"))
 
-SvsGAll = dfAll %>% dplyr::select(-index, -p.value, -stat) %>%
-  gather(Hab, value, -Species,-Type) %>%
+SvsGOrder = dfAll %>% dplyr::select(-index, -p.value, -stat) %>%
+  mutate(Ave = (s.Base+s.Slope+s.Crest+s.Flat)/4) %>% arrange(-Ave) %>% pull(Species)
+SvsGOrder = SvsGOrder[c(1:10,13,11:12,14:16,19,17:18)]
+SvsGAll = dfAll %>% dplyr::select(-index, -p.value, -stat, -Species2) %>%
+  mutate(Ave = (s.Base+s.Slope+s.Crest+s.Flat)) %>%
+  gather(Hab, value, -Species,-Type, -Ave) %>%
+  mutate(value = as.numeric(value)) %>%
   mutate(Hab = factor(Hab, levels = c("s.Base", "s.Slope", "s.Crest", "s.Flat")),
-         value = ifelse(value ==0, NA, value))
+         value = ifelse(value ==0, NA, value)*Ave,
+         Species = factor(Species, levels = SvsGOrder))
 
-ggplot(SvsGAll, aes(x=Hab,y=Species, fill = as.factor(value))) + geom_tile() + 
-  scale_fill_manual(values = c("seagreen2", "grey50")) + theme_bw(base_size = 14)
+
+pIndAll = ggplot(SvsGAll, aes(x=Hab,y=Species, fill = as.factor(value))) + geom_tile() + 
+  # scale_fill_gradient(low = "yellow", high = "seagreen3") +
+  scale_fill_manual(values=c("yellow", "#CCEF49", "#94DE68", "seagreen3"),na.translate=F) +
+  # scale_fill_discrete(na.translate=F) +
+  scale_x_discrete(labels = c("Base", "Slope", "Crest", "Flat"), na.translate=F) +
+  labs(fill = "Number of Habitats", x= "Habitat") +
+  theme_bw(base_size = 14) + 
+  theme(legend.position = "bottom",
+        axis.text.y = element_text(face = "italic"))
+
+ggsave(plot = pIndYear, file="Figures/IndYear.png",dpi=300, height=9, width=9)
+ggsave(plot = pIndYear, file="Figures/IndYear.tiff",dpi=300, height=9, width=9)
+ggsave(plot = pIndYear, file="Figures/IndYear.svg",dpi=300, height=9, width=9)
+ggsave(plot = pIndAll, file="Figures/IndAll.png",dpi=300, height=9, width=7)
+ggsave(plot = pIndAll, file="Figures/IndAll.tiff",dpi=300, height=9, width=7)
+ggsave(plot = pIndAll, file="Figures/IndAll.svg",dpi=300, height=9, width=7)
 
 ```
 
